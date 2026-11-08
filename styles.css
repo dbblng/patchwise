@@ -1,0 +1,311 @@
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #111;
+    color: #eee;
+}
+
+.app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 1.25rem 1rem 2rem;
+}
+
+h1 {
+    font-size: 1.4rem;
+    margin: 0 0 0.25rem;
+    text-align: center;
+}
+
+.subtitle {
+    text-align: center;
+    color: #999;
+    font-size: 0.9rem;
+    margin: 0 0 1.5rem;
+}
+
+.input-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.btn {
+    padding: 0.7rem 1rem;
+    border-radius: 10px;
+    border: none;
+    background: #2a2a2a;
+    color: #eee;
+    font-size: 0.95rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-icon {
+    flex-shrink: 0;
+    padding: 0.6rem 0.7rem;
+    background: #2563eb;
+    font-size: 1.1rem;
+}
+
+.btn-secondary {
+    background: #333;
+}
+
+.search-row {
+    align-items: stretch;
+}
+
+.status {
+    min-height: 1.3rem;
+    text-align: center;
+    color: #aaa;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+.status-error {
+    color: #f87171;
+}
+
+.result.hidden, .copy-row.hidden, .copy-confirm.hidden {
+    display: none;
+}
+
+.coords {
+    text-align: center;
+    color: #888;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+}
+
+.location-name {
+    text-align: center;
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 0.1rem;
+}
+
+.result-row {
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+    align-items: stretch;
+}
+
+.road-box {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    padding: 0.9rem 0.6rem;
+    border-radius: 14px;
+    background: #1c1c1c;
+    border: 2px solid #333;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.road-box.road-green { border-color: #22c55e; }
+.road-box.road-yellow { border-color: #eab308; }
+.road-box.road-red { border-color: #ef4444; }
+
+.road-dot { font-size: 2.2rem; line-height: 1; }
+
+.road-status {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-top: 0.25rem;
+}
+
+.road-message {
+    color: #aaa;
+    font-size: 0.8rem;
+    margin-top: 0.2rem;
+}
+
+.chips-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.weather-line {
+    text-align: center;
+    color: #ccc;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    justify-content: center;
+}
+
+.chip {
+    background: #1c1c1c;
+    border: 1px solid #333;
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
+    color: #ccc;
+}
+
+.copy-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.copy-confirm {
+    color: #22c55e;
+    font-size: 0.85rem;
+}
+
+#search-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.6rem;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #1c1c1c;
+    color: #eee;
+    font-size: 0.95rem;
+}
+
+.search-results {
+    margin-bottom: 1rem;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #333;
+}
+
+.search-result {
+    padding: 0.6rem 0.75rem;
+    font-size: 0.85rem;
+    color: #ccc;
+    background: #1c1c1c;
+    border-bottom: 1px solid #2a2a2a;
+    cursor: pointer;
+}
+
+.search-result:last-child { border-bottom: none; }
+.search-result:active { background: #2a2a2a; }
+
+.forecast-strip {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.forecast-day {
+    flex: 0 0 auto;
+    min-width: 58px;
+    text-align: center;
+    background: #1c1c1c;
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 0.5rem 0.3rem;
+    cursor: pointer;
+}
+
+.forecast-day.fd-open {
+    border-color: #2563eb;
+}
+
+.forecast-day.past-day .fd-dot {
+    opacity: 0.6;
+}
+
+.fd-name {
+    font-size: 0.75rem;
+    color: #999;
+}
+
+.fd-weather {
+    font-size: 0.65rem;
+    color: #888;
+    margin-top: 0.1rem;
+    white-space: nowrap;
+}
+
+.fd-dot {
+    font-size: 1.1rem;
+    margin: 0.15rem 0;
+}
+
+.fd-status {
+    font-size: 0.65rem;
+    color: #aaa;
+}
+
+.forecast-detail {
+    background: #1c1c1c;
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.fd-detail-header {
+    font-size: 0.8rem;
+    color: #aaa;
+    margin-bottom: 0.6rem;
+}
+
+.fh-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.4rem;
+}
+
+/* Hour box — matches the main app's uiModule.js .upcoming-hour structure:
+   time / road-condition dot / precip / humidity / dew point, same class names,
+   colours adapted for this app's dark theme (main app is light-themed). */
+.upcoming-hour {
+    text-align: center;
+    padding: 0.5rem 0.1rem;
+    border-radius: 8px;
+    font-size: 0.6rem;
+}
+
+.upcoming-hour.fh-empty-slot {
+    opacity: 0.3;
+}
+
+.upcoming-dry      { background: rgba(76, 175, 80, 0.1); }
+.upcoming-rain     { background: rgba(33, 150, 243, 0.18); }
+.upcoming-forecast { background: rgba(200, 200, 200, 0.08); }
+
+.upcoming-time { font-weight: 700; color: #aaa; }
+
+.weather-cond-dot {
+    height: 1.1rem;
+    width: 1.1rem;
+    border-radius: 50%;
+    margin: 0.4rem auto;
+}
+.weather-cond-green  { background: #4CAF50; }
+.weather-cond-yellow { background: #FFC107; }
+.weather-cond-red    { background: #F44336; }
+
+.upcoming-precip { font-weight: 700; color: #60a5fa; }
+.upcoming-hum    { margin-top: 0.1rem; }
+.upcoming-dew    { margin-top: 0.05rem; }
+
+/* Humidity/dew colour tiers — matches uiModule.js's humC/dewC, re-tuned for dark bg */
+.rdv-green  { color: #81c784; font-weight: 700; }
+.rdv-lime   { color: #c0ca33; font-weight: 700; }
+.rdv-yellow { color: #ffb74d; font-weight: 700; }
+.rdv-red    { color: #e57373; font-weight: 700; }
+.rdv-grey   { color: #888; font-weight: 400; }

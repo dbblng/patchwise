@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Patchwise</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <h1>🛹 Patchwise</h1>
+    <p class="subtitle">Surface conditions for any spot, instantly.</p>
+
+    <div class="input-row search-row">
+      <button id="gps-btn" class="btn btn-icon" title="Use my location">📍</button>
+      <input type="text" id="search-input" placeholder="Search a place or address…">
+      <button id="search-btn" class="btn">Search</button>
+    </div>
+    <div id="search-results" class="search-results hidden"></div>
+
+    <div id="status" class="status"></div>
+
+    <div id="result" class="result hidden"></div>
+
+    <div id="copy-row" class="copy-row hidden">
+      <button id="copy-btn" class="btn btn-secondary">📋 Copy summary for Trello</button>
+      <span id="copy-confirm" class="copy-confirm hidden">Copied!</span>
+    </div>
+
+    <div id="forecast-strip" class="forecast-strip hidden"></div>
+    <div id="forecast-detail" class="forecast-detail hidden"></div>
+  </div>
+
+  <script src="weatherModule.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
