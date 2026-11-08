@@ -131,15 +131,29 @@ function setStatus(msg, isError) {
     statusEl.classList.toggle('status-error', !!isError);
 }
 
-async function checkLocation(lat, lng, label) {
-    setStatus('Checking…');
+function resetUI(clearSearch) {
     resultEl.classList.add('hidden');
+    resultEl.innerHTML = '';
     copyRowEl.classList.add('hidden');
     observedBlockEl.classList.add('hidden');
     forecastStripEl.classList.add('hidden');
+    forecastStripEl.innerHTML = '';
     forecastDetailEl.classList.add('hidden');
     forecastDetailEl.innerHTML = '';
     searchResultsEl.classList.add('hidden');
+    searchResultsEl.innerHTML = '';
+    notesInputEl.value = '';
+    selectedObserved = null;
+    lastCheck = null;
+    rawHourly = null;
+    openDayIdx = null;
+    setStatus('');
+    if (clearSearch) document.getElementById('search-input').value = '';
+}
+
+async function checkLocation(lat, lng, label) {
+    resetUI(false);
+    setStatus('Checking…');
 
     const data = await weatherModule.getForecast(lat, lng);
     if (!data || !data.roadCondition) {
@@ -411,4 +425,8 @@ document.getElementById('copy-btn').addEventListener('click', async () => {
     } catch (e) {
         setStatus('Could not copy — select and copy manually.', true);
     }
+});
+
+document.getElementById('reset-btn').addEventListener('click', () => {
+    resetUI(true);
 });
