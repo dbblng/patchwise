@@ -7,8 +7,11 @@ const copyConfirmEl = document.getElementById('copy-confirm');
 const searchResultsEl = document.getElementById('search-results');
 const forecastStripEl = document.getElementById('forecast-strip');
 const forecastDetailEl = document.getElementById('forecast-detail');
+const observedBlockEl = document.getElementById('observed-block');
+const notesInputEl = document.getElementById('notes-input');
 
-let lastSummary = '';
+let lastCheck = null; // { lat, lng, label, road, hrsVal, checkedAt }
+let selectedObserved = null;
 let rawHourly = null;
 
 // Mirrors weatherModule.js's internal parseLocalTime — replicated here rather than
@@ -132,6 +135,7 @@ async function checkLocation(lat, lng, label) {
     setStatus('Checking…');
     resultEl.classList.add('hidden');
     copyRowEl.classList.add('hidden');
+    observedBlockEl.classList.add('hidden');
     forecastStripEl.classList.add('hidden');
     forecastDetailEl.classList.add('hidden');
     forecastDetailEl.innerHTML = '';
@@ -187,17 +191,28 @@ function renderResult(lat, lng, label, data) {
     `;
     resultEl.classList.remove('hidden');
 
-    const now = new Date();
-    lastSummary = `Patchwise — ${now.toLocaleString()}\n` +
+    lastCheck = { lat, lng, label, road, hrsVal, checkedAt: new Date() };
+
+    selectedObserved = null;
+    notesInputEl.value = '';
+    document.querySelectorAll('.obs-btn').forEach(b => b.classList.remove('obs-selected'));
+    observedBlockEl.classList.remove('hidden');
+
+    copyRowEl.classList.remove('hidden');
+    copyConfirmEl.classList.add('hidden');
+}
+
+function buildSummary() {
+    if (!lastCheck) return '';
+    const { lat, lng, label, road, hrsVal, checkedAt } = lastCheck;
+    const notes = notesInputEl.value.trim();
+    return `Patchwise — ${checkedAt.toLocaleString()}\n` +
         `Location: ${label ? label + ' — ' : ''}${lat.toFixed(5)}, ${lng.toFixed(5)}\n` +
         `Predicted: ${road.status} (${road.message || ''})\n` +
         `hoursSinceRain: ${hrsVal}, sev: ${road.rainSeverity}/3, hum: ${road.minDaytimeHumidity}%, ` +
         `dew: ${road.minDaytimeDewpoint}°C, wind: ${road.avgSkatingWind}km/h, Δ: ${road.humidityDelta}\n` +
-        `Observed: [fill in what you actually see]\n` +
-        `Notes: `;
-
-    copyRowEl.classList.remove('hidden');
-    copyConfirmEl.classList.add('hidden');
+        `Observed: ${selectedObserved || '(not set)'}\n` +
+        `Notes: ${notes}`;
 }
 
 const TARGET_HOURS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
@@ -380,9 +395,17 @@ document.getElementById('search-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') searchPlace();
 });
 
+document.querySelectorAll('.obs-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        selectedObserved = btn.dataset.status;
+        document.querySelectorAll('.obs-btn').forEach(b => b.classList.remove('obs-selected'));
+        btn.classList.add('obs-selected');
+    });
+});
+
 document.getElementById('copy-btn').addEventListener('click', async () => {
     try {
-        await navigator.clipboard.writeText(lastSummary);
+        await navigator.clipboard.writeText(buildSummary());
         copyConfirmEl.classList.remove('hidden');
         setTimeout(() => copyConfirmEl.classList.add('hidden'), 2000);
     } catch (e) {

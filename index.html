@@ -26,6 +26,16 @@
 
     <div id="result" class="result hidden"></div>
 
+    <div id="observed-block" class="observed-block hidden">
+      <div class="observed-label">What do you see?</div>
+      <div class="observed-buttons">
+        <button class="obs-btn" data-status="Dry">🟢 Dry</button>
+        <button class="obs-btn" data-status="Patchy">🟡 Patchy</button>
+        <button class="obs-btn" data-status="Wet">🔴 Wet</button>
+      </div>
+      <textarea id="notes-input" class="notes-input" placeholder="Optional notes…" rows="2"></textarea>
+    </div>
+
     <div id="copy-row" class="copy-row hidden">
       <button id="copy-btn" class="btn btn-secondary">📋 Copy summary for Trello</button>
       <span id="copy-confirm" class="copy-confirm hidden">Copied!</span>
