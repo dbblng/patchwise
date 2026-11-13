@@ -10,9 +10,10 @@ const forecastDetailEl = document.getElementById('forecast-detail');
 const observedBlockEl = document.getElementById('observed-block');
 const notesInputEl = document.getElementById('notes-input');
 
-let lastCheck = null; // { lat, lng, label, road, hrsVal, checkedAt }
+let lastCheck = null; // { lat, lng, label, road, hrsVal, slotStatus, checkedAt }
 let selectedObserved = null;
 let rawHourly = null;
+let allHourScores = null; // unified hour-score lookup from processForecast, covers every hour
 
 // Mirrors weatherModule.js's internal parseLocalTime — replicated here rather than
 // touching the shared algorithm file for a display-only lookup.
@@ -23,71 +24,6 @@ function parseLocalTime(raw) {
     const [yr, mo, dy] = datePart.split('-').map(Number);
     const [hr, mn] = timePart.split(':').map(Number);
     return new Date(yr, mo - 1, dy, hr, mn, 0, 0);
-}
-
-// Retroactive road-condition scoring for an elapsed/past 2h slot, using actual
-// recorded conditions. Ported from uiModule.js's day-detail hourly strip (the main
-// app computes this for any past hour, not just future-forecast ones) — kept as a
-// faithful copy rather than touching weatherModule.js's scoreHourCondition.
-function scorePastSlot(h, now) {
-    let hsr = null;
-    for (let ri = 0; ri < rawHourly.time.length; ri++) {
-        const rt = parseLocalTime(rawHourly.time[ri]);
-        if (rt >= h.t) break;
-        if ((rawHourly.precipitation[ri] || 0) > 0.1) hsr = Math.round((h.t - rt) / 3600000);
-    }
-    const effHsr = h.precip > 0.1 ? 0 : hsr;
-    const sev = h.precip >= 3 ? 2 : h.precip >= 0.3 ? 1 : 0;
-
-    const slotTemp = rawHourly.temperature_2m ? (rawHourly.temperature_2m[h.i0] ?? null) : null;
-    const slotDew = rawHourly.dewpoint_2m ? (rawHourly.dewpoint_2m[h.i0] ?? null) : null;
-    let dewDeprMod = 0;
-    if (slotTemp !== null && slotDew !== null) {
-        const gap = slotTemp - slotDew;
-        if (gap < 3) dewDeprMod = +1;
-        else if (gap < 6) dewDeprMod = 0;
-        else if (gap < 12) dewDeprMod = -1;
-        else dewDeprMod = -2;
-    }
-    const slotWind = rawHourly.windspeed_10m ? (rawHourly.windspeed_10m[h.i0] ?? null) : null;
-    let windMod = 0;
-    if (slotWind !== null) {
-        if (slotWind > 30) windMod = -2;
-        else if (slotWind > 15) windMod = -1;
-        else if (slotWind < 5) windMod = +1;
-    }
-    let tempMod = 0;
-    if (slotTemp !== null) {
-        if (slotTemp < 5) tempMod = +1;
-        else if (slotTemp > 15) tempMod = -1;
-    }
-    const totalMod = Math.max(-2, Math.min(2, dewDeprMod + windMod + tempMod));
-    const BANDS = ['green', 'yellow', 'red'];
-    const applyMod = (base) => BANDS[Math.max(0, Math.min(2, base + totalMod))];
-
-    let color;
-    if (effHsr === null) {
-        color = applyMod(h.hum > 85 ? 2 : h.hum > 78 ? 1 : 0);
-    } else if (effHsr === 0) {
-        color = 'red';
-    } else if (effHsr < 2) {
-        color = sev >= 1 ? 'red' : 'yellow';
-    } else if (effHsr < 6) {
-        let base = sev >= 3 ? 2 : (sev >= 2 && h.hum > 65) ? 2 : sev >= 2 ? 1
-            : (sev >= 1 && h.hum > 65) ? 1 : sev >= 1 ? 1 : 0;
-        const minIdx = (sev >= 2 || h.hum > 78) ? 1 : 0;
-        color = BANDS[Math.max(minIdx, Math.min(2, base + totalMod))];
-    } else if (effHsr < 12) {
-        color = applyMod((sev >= 2 || h.hum > 85) ? 2 : (sev >= 1 || h.hum > 78) ? 1 : 0);
-    } else if (effHsr < 24) {
-        color = applyMod((sev >= 3 && h.hum > 78) ? 2 : (sev >= 2 || h.hum > 85) ? 1 : (sev >= 1 || h.hum > 78) ? 1 : 0);
-    } else if (effHsr < 48) {
-        color = applyMod((sev >= 3 && h.hum > 78) ? 2 : (sev >= 2 || h.hum > 78) ? 1 : 0);
-    } else {
-        color = applyMod(h.hum > 85 ? 2 : h.hum > 78 ? 1 : 0);
-    }
-    if (h.precip > 0.1 && color !== 'red') color = 'red';
-    return color;
 }
 
 // Builds the 2h-paired slots for a given calendar day, matching uiModule.js exactly:
@@ -146,6 +82,7 @@ function resetUI(clearSearch) {
     selectedObserved = null;
     lastCheck = null;
     rawHourly = null;
+    allHourScores = null;
     openDayIdx = null;
     setStatus('');
     if (clearSearch) document.getElementById('search-input').value = '';
@@ -162,10 +99,49 @@ async function checkLocation(lat, lng, label) {
     }
 
     rawHourly = data.roadCondition.rawData ? data.roadCondition.rawData.hourly : null;
+    allHourScores = (data.forecast && data.forecast.allHourScores) || null;
 
     setStatus('');
     renderResult(lat, lng, label, data);
     renderForecastStrip(data);
+}
+
+// Big-box dot color + message: derives from the unified hour-score lookup (the
+// current 2h slot containing "now"), same source of truth as the hourly strip — not
+// from calculateRoadCondition's own independent status/message. Returns
+// {color, message} or null if the lookup has no data (e.g. incomplete API response),
+// in which case callers fall back to road.color/road.message.
+function getCurrentSlotColor(data, now) {
+    if (!rawHourly || !data.forecast || !data.forecast.allHourScores) return null;
+    const allHourScores = data.forecast.allHourScores;
+    const colorRank = { green: 0, yellow: 1, red: 2 };
+    const makeKey = (t) => t.getFullYear() + '-' +
+        String(t.getMonth()+1).padStart(2,'0') + '-' +
+        String(t.getDate()).padStart(2,'0') + 'T' +
+        String(t.getHours()).padStart(2,'0');
+
+    for (let i = 0; i < rawHourly.time.length; i++) {
+        const t = parseLocalTime(rawHourly.time[i]);
+        const rawHour = parseInt(rawHourly.time[i].slice(11, 13), 10);
+        if (rawHour % 2 !== 0) continue;
+        const slotEnd = new Date(t.getTime() + 2 * 3600000);
+        if (t <= now && now < slotEnd) {
+            const nextI = i + 1 < rawHourly.time.length ? i + 1 : null;
+            const s0 = allHourScores[makeKey(t)];
+            const t1 = nextI !== null ? parseLocalTime(rawHourly.time[nextI]) : null;
+            const s1 = t1 ? allHourScores[makeKey(t1)] : null;
+            let col = s0 ? s0.color : null;
+            if (s1 && colorRank[s1.color] > colorRank[col || 'green']) col = s1.color;
+            const p0 = rawHourly.precipitation[i] || 0;
+            const p1 = nextI !== null ? (rawHourly.precipitation[nextI] || 0) : 0;
+            if ((p0 + p1) > 0.1) col = 'red';
+            // Message travels with the slot's own score so the subtext under the big
+            // dot can never contradict the hour that's actually driving its color.
+            const message = s0 ? s0.message : null;
+            return { color: col, message };
+        }
+    }
+    return null;
 }
 
 function renderResult(lat, lng, label, data) {
@@ -176,14 +152,20 @@ function renderResult(lat, lng, label, data) {
         ? (road.hoursSinceRain === 0 ? 'now' : road.hoursSinceRain + 'h')
         : '3d+';
 
+    const slot = getCurrentSlotColor(data, new Date());
+    const slotColor   = (slot && slot.color) || road.color;
+    const slotEmoji   = { green: '🟢', yellow: '🟡', red: '🔴' }[slotColor] || road.emoji;
+    const slotStatus  = { green: 'DRY', yellow: 'PATCHY', red: 'WET' }[slotColor] || road.status;
+    const slotMessage = (slot && slot.message) || road.message;
+
     resultEl.innerHTML = `
         <div class="location-name">${label || 'Selected location'}</div>
         <div class="coords">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
         <div class="result-row">
-            <div class="road-box road-${road.color}">
-                <div class="road-dot">${road.emoji}</div>
-                <div class="road-status">${road.status}</div>
-                <div class="road-message">${road.message || ''}</div>
+            <div class="road-box road-${slotColor}">
+                <div class="road-dot">${slotEmoji}</div>
+                <div class="road-status">${slotStatus}</div>
+                <div class="road-message">${slotMessage || ''}</div>
             </div>
             <div class="chips-col">
                 <div class="weather-line">
@@ -205,7 +187,7 @@ function renderResult(lat, lng, label, data) {
     `;
     resultEl.classList.remove('hidden');
 
-    lastCheck = { lat, lng, label, road, hrsVal, checkedAt: new Date() };
+    lastCheck = { lat, lng, label, road, hrsVal, slotStatus, slotMessage, checkedAt: new Date() };
 
     selectedObserved = null;
     notesInputEl.value = '';
@@ -218,11 +200,11 @@ function renderResult(lat, lng, label, data) {
 
 function buildSummary() {
     if (!lastCheck) return '';
-    const { lat, lng, label, road, hrsVal, checkedAt } = lastCheck;
+    const { lat, lng, label, road, hrsVal, slotStatus, slotMessage, checkedAt } = lastCheck;
     const notes = notesInputEl.value.trim();
     return `Patchwise — ${checkedAt.toLocaleString()}\n` +
         `Location: ${label ? label + ' — ' : ''}${lat.toFixed(5)}, ${lng.toFixed(5)}\n` +
-        `Predicted: ${road.status} (${road.message || ''})\n` +
+        `Predicted: ${slotStatus} (${slotMessage || ''})\n` +
         `hoursSinceRain: ${hrsVal}, sev: ${road.rainSeverity}/3, hum: ${road.minDaytimeHumidity}%, ` +
         `dew: ${road.minDaytimeDewpoint}°C, wind: ${road.avgSkatingWind}km/h, Δ: ${road.humidityDelta}\n` +
         `Observed: ${selectedObserved || '(not set)'}\n` +
@@ -278,7 +260,7 @@ let openDayIdx = null;
 const humC = h => h == null ? 'rdv-grey' : h < 70 ? 'rdv-green' : h < 78 ? 'rdv-lime' : h < 85 ? 'rdv-yellow' : 'rdv-red';
 const dewC = d => d == null ? 'rdv-grey' : d < 5 ? 'rdv-green' : d < 10 ? 'rdv-lime' : d < 15 ? 'rdv-yellow' : 'rdv-red';
 
-function renderHourBox(hour, slot, hourScores, now) {
+function renderHourBox(hour, slot, hourScores) {
     const timeLabel = String(hour).padStart(2, '0') + ':00';
 
     if (!slot) {
@@ -289,20 +271,21 @@ function renderHourBox(hour, slot, hourScores, now) {
         `;
     }
 
-    let color;
-    if (slot.isFuture && hourScores) {
+    // Future slots use the day's own hourScores; past slots now read from the
+    // unified allHourScores lookup (built in processForecast with a real 12h-window
+    // rainSeverity) instead of the old scorePastSlot re-derivation.
+    const source = slot.isFuture ? hourScores : allHourScores;
+    let color = 'green';
+    if (source) {
         const colorRank = { green: 0, yellow: 1, red: 2 };
         const makeKey = (hr) => slot.t.getFullYear() + '-' +
             String(slot.t.getMonth() + 1).padStart(2, '0') + '-' +
             String(slot.t.getDate()).padStart(2, '0') + 'T' +
             String(hr).padStart(2, '0');
-        const s0 = hourScores[makeKey(slot.t.getHours())];
-        const s1 = hourScores[makeKey(slot.t.getHours() + 1)];
-        color = 'green';
+        const s0 = source[makeKey(slot.t.getHours())];
+        const s1 = source[makeKey(slot.t.getHours() + 1)];
         if (s0) color = s0.color;
         if (s1 && colorRank[s1.color] > colorRank[color]) color = s1.color;
-    } else {
-        color = scorePastSlot(slot, now);
     }
     if (slot.precip > 0.1 && color !== 'red') color = 'red';
 
@@ -341,7 +324,7 @@ function toggleForecastDetail(day, dayEl) {
     slots.forEach(s => { slotByHour[s.t.getHours()] = s; });
 
     const hourRows = TARGET_HOURS.map(hour =>
-        renderHourBox(hour, slotByHour[hour] || null, day.hourScores, now)
+        renderHourBox(hour, slotByHour[hour] || null, day.hourScores)
     ).join('');
 
     forecastDetailEl.innerHTML = `

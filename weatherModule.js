@@ -5,8 +5,21 @@
 
    NOTE: this is a deliberate copy of steepmap/weatherModule.js, kept here
    so this standalone app has no dependency on the main SteepMap frontend.
-   Algorithm fixes (e.g. rainSeverity window bug, 2026-11-07) must be
-   applied to BOTH copies manually — they are not kept in sync automatically.
+   Algorithm fixes must be applied to BOTH copies manually — they are not
+   kept in sync automatically. Last synced 2026-11-11 (humidity/modifier
+   dry-only fix, hoursSinceRain===0 hard WET lock, temperature-scaled
+   drying power beyond the 2h hard lock, every hour now scored + global
+   allHourScores lookup as the single source of truth for past/current hours,
+   shared _formatHoursSinceRainMessage so the big-dot message travels with
+   whichever hour's score is actually driving the dot, rainDurationHours factor
+   lets light/brief rain (sev 1, <12h actual rain) read PATCHY not WET once past
+   a shorter 1h no-exceptions window instead of the flat 2h lock for all rain;
+   light/brief rain's modifiers are dry-only too, so calm+humid windMod can't
+   re-inflate the PATCHY floor back to WET in both calculateRoadCondition and
+   scoreHourCondition's 2-6h bands; day-dot now weighted by box/skating-window
+   overlap fraction instead of flat per-box counting, with a green bar that
+   scales down for shorter skating windows — single unified calc, uiModule.js's
+   separate aggregateDot deleted entirely).
    ========================================== */
 
 function initWeatherModule() {
@@ -73,7 +86,7 @@ function initWeatherModule() {
             processedData._lat = lat;
             processedData._lng = lng;
             console.log('🌤️ Processed weather data:', processedData);
-            
+
             return processedData;
         } catch (error) {
             console.error('❌ Failed to fetch weather:', error);
@@ -178,8 +191,24 @@ function initWeatherModule() {
      * @param {number|null} dewpoint        — dew point °C at this hour (null = unknown)
      * @param {number|null} wind            — wind speed km/h at this hour (null = unknown)
      * @param {number|null} temperature     — air temperature °C at this hour (null = unknown)
+     * @param {number}      rainDurationHours — consecutive hours the most recent rain event
+     *   actually lasted (distinct from severity/amount); defaults to a large number (treated
+     *   as "not brief") if omitted, so existing callers without this data are unaffected.
      */
-    module.scoreHourCondition = function(hoursSinceRain, rainSeverity, humidity, dewpoint, wind, temperature) {
+
+    /**
+     * Shared "how long since rain" message text, used by both calculateRoadCondition
+     * (today's live status) and processForecast (every hour's unified score) — one
+     * place generating this text instead of two independently-worded copies, so the
+     * big dot's subtext can never contradict the hour it's actually describing.
+     */
+    module._formatHoursSinceRainMessage = function(h) {
+        if (h === null) return 'No rain 3+ days';
+        if (h === 0) return 'Raining now';
+        if (h < 24) return `Rain ${h}h ago`;
+        return `Rain ${Math.floor(h / 24)}d ago`;
+    };
+    module.scoreHourCondition = function(hoursSinceRain, rainSeverity, humidity, dewpoint, wind, temperature, rainDurationHours) {
         const BANDS = ['DRY', 'PATCHY', 'WET'];
         const applyMods = (baseIdx, ...mods) => {
             const idx = Math.max(0, Math.min(2, baseIdx + mods.reduce((a,b) => a+b, 0)));
@@ -231,28 +260,46 @@ function initWeatherModule() {
         // hour look green when the road is physically still soaked.
         const totalMod = Math.max(-2, Math.min(2, dewDeprMod + windMod + tempMod));
 
+        // --- Temperature-scaled drying power (bands beyond the 1-2h hard lock only) ---
+        // Same reasoning as calculateRoadCondition: these ambient modifiers' drying
+        // direction is only as effective as the temperature allows — cold air has little
+        // real drying power even when windy/dry, warm air dries genuinely fast. Only ever
+        // weakens (cold) or strengthens (warm) an already-negative total; never flips a
+        // dampening total into a drying one.
+        const scaledTotalMod = totalMod >= 0 || temperature === null ? totalMod
+            : temperature < 5  ? 0
+            : temperature > 15 ? totalMod - 1
+            : totalMod;
+
         // 0h: actively raining — always WET, no exceptions
         if (hoursSinceRain === 0) {
             return { status: 'WET', color: 'red', emoji: '🔴' };
         }
 
         // 1–2h: hard lock — severity drives result, no modifier softening.
-        // Road is physically wet regardless of conditions.
+        // Road is physically wet regardless of conditions — except light, brief rain
+        // (severity 1, under ~12h of actual rain), which doesn't leave the same soaking
+        // and reads as PATCHY rather than WET.
         if (hoursSinceRain < 2) {
-            const base = rainSeverity >= 1 ? 2 : 1;
+            const durationHrs = rainDurationHours === undefined ? Infinity : rainDurationHours;
+            const lightBriefRain = rainSeverity === 1 && durationHrs < 12;
+            const base = lightBriefRain ? 1 : (rainSeverity >= 1 ? 2 : 1);
             return { status: BANDS[base], color: ['green','yellow','red'][base], emoji: ['🟢','🟡','🔴'][base] };
         }
 
         // No recent rain: check for persistent damp (fog, condensation, high-humidity air mass)
+        // No rain in the window → modifiers may only dry things out, never manufacture wetness;
+        // and humidity alone can never reach WET without actual rain involved.
         if (hoursSinceRain === null) {
-            let base = 0;
-            if      (humidity > 85) base = 2;
-            else if (humidity > 78) base = 1;
-            return applyMods(base, totalMod);
+            const base = humidity > 78 ? 1 : 0;
+            return applyMods(base, Math.min(0, scaledTotalMod));
         }
 
         // 2–6h: humidity-gated with full modifiers, but floor prevents mods overriding wet road
         if (hoursSinceRain < 6) {
+            const durationHrs = rainDurationHours === undefined ? Infinity : rainDurationHours;
+            const lightBriefRain = rainSeverity === 1 && durationHrs < 12;
+
             let base;
             if      (rainSeverity >= 3)                        base = 2; // very heavy: WET floor
             else if (rainSeverity >= 2 && humidity > 65)       base = 2; // moderate + damp: WET
@@ -262,7 +309,12 @@ function initWeatherModule() {
             else                                                base = 0; // light + dry + 4–6h: DRY possible
             // Floor: severity ≥2 OR persistently high humidity → mods cannot push below PATCHY
             const minIdx = (rainSeverity >= 2 || humidity > 78) ? 1 : 0;
-            const idx = Math.max(minIdx, Math.min(2, base + totalMod));
+            // Light, brief rain's ambient modifiers may only dry things out further,
+            // never push it back up toward WET — same rule as the no-rain-relevant
+            // bands (found 2026-11-12: calm+humid windMod was silently re-inflating
+            // PATCHY back to WET here for a short, light rain event).
+            const effMod = lightBriefRain ? Math.min(0, scaledTotalMod) : scaledTotalMod;
+            const idx = Math.max(minIdx, Math.min(2, base + effMod));
             return { status: BANDS[idx], color: ['green','yellow','red'][idx], emoji: ['🟢','🟡','🔴'][idx] };
         }
 
@@ -276,13 +328,13 @@ function initWeatherModule() {
                 else if (rainSeverity >= 2 || humidity > 85) base = 1;
                 else if (rainSeverity >= 1 || humidity > 78) base = 1;
                 else                                          base = 0;
-                return applyMods(base, totalMod);
+                return applyMods(base, scaledTotalMod);
             }
             let base;
             if      (rainSeverity >= 2 || humidity > 85) base = 2;
             else if (rainSeverity >= 1 || humidity > 78) base = 1;
             else                                          base = 0;
-            return applyMods(base, totalMod);
+            return applyMods(base, scaledTotalMod);
         }
 
         // 12–24h
@@ -292,7 +344,7 @@ function initWeatherModule() {
             else if (rainSeverity >= 2 || humidity > 85) base = 1;
             else if (rainSeverity >= 1 || humidity > 78) base = 1;
             else                                          base = 0;
-            return applyMods(base, totalMod);
+            return applyMods(base, scaledTotalMod);
         }
 
         // 24–48h
@@ -301,14 +353,13 @@ function initWeatherModule() {
             if      (rainSeverity >= 3 && humidity > 78) base = 2;
             else if (rainSeverity >= 2 || humidity > 78) base = 1;
             else                                          base = 0;
-            return applyMods(base, totalMod);
+            return applyMods(base, scaledTotalMod);
         }
 
-        // 48h+: DRY unless persistent damp conditions
-        let base = 0;
-        if      (humidity > 85) base = 2;
-        else if (humidity > 78) base = 1;
-        return applyMods(base, totalMod);
+        // 48h+: DRY unless persistent damp conditions. Same no-rain-relevant rule as the
+        // null band above — modifiers dry-only, humidity alone capped below WET.
+        const base = humidity > 78 ? 1 : 0;
+        return applyMods(base, Math.min(0, scaledTotalMod));
     };
 
     module.processForecast = function(data, roadCondition) {
@@ -336,17 +387,16 @@ function initWeatherModule() {
         }
 
         // --- Walk all hours chronologically, computing per-hour road condition ---
+        // Scores EVERY hour (past 3d through forecast horizon), not just future ones —
+        // past hours need the same real 12h-window rainSeverity as future ones so that
+        // the big-dot "current slot" lookup and any past-hour strip rendering can read a
+        // properly-computed score instead of re-deriving one locally (that re-derivation
+        // was the source of the hour-strip/big-dot disagreement bug, 2026-11-11).
         // Track: hoursSinceRain (counting forward), rolling 12h precip for severity
         let lastRainIdx = null;
-        // Find last rain before forecast period to seed hoursSinceRain correctly
-        for (let i = 0; i < allHours.length; i++) {
-            if (allHours[i].t > now) break;
-            if (allHours[i].precip > 0.1) lastRainIdx = i;
-        }
 
         for (let i = 0; i < allHours.length; i++) {
             const h = allHours[i];
-            if (h.t <= now) continue; // only score future hours
 
             // Update lastRainIdx if this hour has rain
             if (h.precip > 0.1) lastRainIdx = i;
@@ -376,7 +426,17 @@ function initWeatherModule() {
             // If this hour itself has rain, hoursSinceRain = 0
             const effectiveHoursSinceRain = thisPrecip > 0.1 ? 0 : hoursSinceRain;
 
-            h.score = this.scoreHourCondition(effectiveHoursSinceRain, rainSeverity, h.humidity, h.dewpoint, h.wind, h.temp);
+            // How many consecutive hours did the most recent rain event actually last —
+            // distinct from rainSeverity (intensity/total amount).
+            let rainDurationHours = 0;
+            if (lastRainIdx !== null) {
+                for (let k = lastRainIdx; k >= 0; k--) {
+                    if (allHours[k].precip > 0.1) rainDurationHours++;
+                    else break;
+                }
+            }
+
+            h.score = this.scoreHourCondition(effectiveHoursSinceRain, rainSeverity, h.humidity, h.dewpoint, h.wind, h.temp, rainDurationHours);
             h.hoursSinceRain = effectiveHoursSinceRain;
             h.rainSeverity   = rainSeverity;
 
@@ -412,6 +472,10 @@ function initWeatherModule() {
             };
         };
 
+        // Lookup from timestamp (ms) to allHours index — used to find an hour's paired
+        // partner (the next hour) when building 2-hour day-dot "boxes" below.
+        const allHoursByTime = new Map(allHours.map((h, idx) => [h.t.getTime(), idx]));
+
         // --- Build forecast day objects ---
         const today = new Date(); today.setHours(0, 0, 0, 0);
         let startIndex = 3;
@@ -430,34 +494,58 @@ function initWeatherModule() {
             // All scored future hours for this day
             const dayHours = allHours.filter(h => h.t > now && h.t >= dayStart && h.t < dayEnd && h.score !== null);
 
-            // Remaining skating-window hours from now
-            const skatingHours = win
-                ? dayHours.filter(h => h.t >= win.start && h.t <= win.end)
-                : [];
-
-            // Day dot: based on even-hour skating window boxes (matching the strip the user sees)
-            // Rules (N = number of boxes):
-            //   RED:   greenCount===0 && redCount>=1
-            //          OR redCount > greenCount && redCount >= ceil(N*0.6)
-            //   GREEN: redCount===0 && greenCount >= ceil(N*0.8)
+            // Day dot: based on 2-hour paired "boxes" that overlap the skating window,
+            // weighted by HOW MUCH of each box actually overlaps it — a box clipping
+            // just a few minutes of the window counts for almost nothing, instead of
+            // the same full weight as a box entirely inside it (found 2026-11-13: an
+            // 08:00 box barely clipping a 9:55 window start was otherwise "almost
+            // irrelevant" in reality but counted as a full box). Each box pairs an even
+            // hour with its next (odd) hour and takes the WORSE of the two, matching
+            // what the hour strip actually displays — unified here as the single
+            // calculation both apps read from, replacing two separately-coded (and
+            // once-disagreeing) implementations.
+            //
+            // The green bar also scales with how much skating-window data there is:
+            // short windows (common outside summer) get a more forgiving bar than long
+            // ones, so a single marginal hour doesn't swing an otherwise-mostly-green
+            // short day to PATCHY the way a flat 80% requirement would.
+            // Rules (totalWeight = sum of box overlap-weights, ~window-hours/2):
+            //   RED:   greenWeight<REDFLOOR && redWeight>=REDFLOOR
+            //          OR redWeight > greenWeight+0.5 && redWeight >= totalWeight*0.6
+            //   GREEN: redWeight<REDFLOOR && greenWeight >= totalWeight*greenPct
             //   YELLOW: everything else
             let forecastCondition = { status: 'DRY', color: 'green', emoji: '🟢' };
 
-            // Only use even-hour slots within skating window — matches what strip shows
-            const skatingBoxes = win
-                ? skatingHours.filter(h => h.t.getHours() % 2 === 0)
-                : [];
+            const REDFLOOR = 0.15; // a red sliver under ~18min of a 2h box doesn't count as "red present"
+            const boxWeights = [];
+            if (win) {
+                for (const h of dayHours) {
+                    if (h.t.getHours() % 2 !== 0) continue; // one box per even hour
+                    const boxStart = h.t.getTime();
+                    const boxEnd   = boxStart + 2 * 3600000;
+                    const overlapMs = Math.min(boxEnd, win.end.getTime()) - Math.max(boxStart, win.start.getTime());
+                    if (overlapMs <= 0) continue; // box doesn't overlap the skating window at all
+                    const weight = overlapMs / (2 * 3600000);
+                    const partnerIdx = allHoursByTime.get(h.t.getTime() + 3600000);
+                    const partner = partnerIdx !== undefined ? allHours[partnerIdx] : null;
+                    const statuses = [h.score.status];
+                    if (partner && partner.score) statuses.push(partner.score.status);
+                    const worst = statuses.includes('WET') ? 'WET' : statuses.includes('PATCHY') ? 'PATCHY' : 'DRY';
+                    boxWeights.push({ status: worst, weight });
+                }
+            }
 
-            if (skatingBoxes.length > 0) {
-                const N          = skatingBoxes.length;
-                const redCount   = skatingBoxes.filter(h => h.score.status === 'WET').length;
-                const greenCount = skatingBoxes.filter(h => h.score.status === 'DRY').length;
-                const redThresh  = Math.ceil(N * 0.6);
-                const greenThresh = Math.ceil(N * 0.8);
+            if (boxWeights.length > 0) {
+                const totalWeight = boxWeights.reduce((a, b) => a + b.weight, 0);
+                const redWeight   = boxWeights.filter(b => b.status === 'WET').reduce((a, b) => a + b.weight, 0);
+                const greenWeight = boxWeights.filter(b => b.status === 'DRY').reduce((a, b) => a + b.weight, 0);
+                const greenPct    = totalWeight >= 6 ? 0.8 : totalWeight >= 3 ? 0.7 : 0.6;
+                const redThresh   = totalWeight * 0.6;
+                const greenThresh = totalWeight * greenPct;
 
-                const isRed = (greenCount === 0 && redCount >= 1) ||
-                              (redCount > greenCount + 1 && redCount >= redThresh);
-                const isGreen = redCount === 0 && greenCount >= greenThresh;
+                const isRed = (greenWeight < REDFLOOR && redWeight >= REDFLOOR) ||
+                              (redWeight > greenWeight + 0.5 && redWeight >= redThresh);
+                const isGreen = redWeight < REDFLOOR && greenWeight >= greenThresh;
 
                 if (isRed)        forecastCondition = { status: 'WET',    color: 'red',    emoji: '🔴' };
                 else if (isGreen) forecastCondition = { status: 'DRY',    color: 'green',  emoji: '🟢' };
@@ -511,6 +599,31 @@ function initWeatherModule() {
                 hourScores       // keyed by "YYYY-MM-DDTHH" UTC ISO prefix
             });
         }
+
+        // --- Global hour-score lookup, covering every hour in allHours (past 3d +  ---
+        // --- forecast horizon) — the single source of truth every consumer (hour   ---
+        // --- strip, big-dot current-slot, past-day detail views) should read from, ---
+        // --- instead of re-deriving a score locally from scratch.
+        const allHourScores = {};
+        for (const h of allHours) {
+            if (h.score === null) continue;
+            const localKey = h.t.getFullYear() + '-' +
+                String(h.t.getMonth()+1).padStart(2,'0') + '-' +
+                String(h.t.getDate()).padStart(2,'0') + 'T' +
+                String(h.t.getHours()).padStart(2,'0');
+            const base = h.precip > 0.1
+                ? { status: 'WET', color: 'red', emoji: '🔴' }
+                : h.score;
+            // hoursSinceRain/message travel with the score so any consumer showing this
+            // hour's dot can show matching text, instead of a separately-tracked message
+            // that can contradict the dot (the big-dot/message mismatch, 2026-11-11).
+            allHourScores[localKey] = {
+                ...base,
+                hoursSinceRain: h.hoursSinceRain,
+                message: this._formatHoursSinceRainMessage(h.hoursSinceRain)
+            };
+        }
+        forecasts.allHourScores = allHourScores;
 
         return forecasts;
     };
@@ -581,18 +694,38 @@ function initWeatherModule() {
         const unaccountedRain = Math.max(0, todayHourlyFromRaw - todayHourlySum);
         const hourlyLagged = unaccountedRain > 0.2;
 
-        // --- Find last rain hour ---
-        let hoursSinceRain = null, lastRainTime = null;
+        // --- Find last rain hour, and how long that rain event actually lasted ---
+        // rainDurationHours is distinct from rainSeverity (intensity/total amount) —
+        // a brief burst and a long soaking can share the same severity but dry very
+        // differently. pastHours is newest-first, so scanning forward from the last
+        // rain hour counts consecutive rain hours further back in time.
+        let hoursSinceRain = null, lastRainTime = null, rainDurationHours = 0;
         for (let i = 0; i < pastHours.length; i++) {
             if (pastHours[i].precip > 0.1) {
                 lastRainTime = pastHours[i].time;
                 hoursSinceRain = Math.floor((now - lastRainTime) / 3600000);
+                for (let j = i; j < pastHours.length; j++) {
+                    if (pastHours[j].precip > 0.1) rainDurationHours++;
+                    else break;
+                }
                 break;
             }
         }
         if (hourlyLagged && (hoursSinceRain === null || hoursSinceRain > 1)) {
             hoursSinceRain = 0;
             lastRainTime = now;
+        }
+
+        // PRIORITY 1b: hourly data shows rain in the current hour, even though the
+        // instantaneous "current weather" reading above missed it (nowcast vs. observed
+        // data can disagree). Same hard WET lock as PRIORITY 1 — the road is still
+        // physically wet regardless of how light the hourly amount looks, so severity
+        // thresholds must not be allowed to soften this down to PATCHY.
+        if (hoursSinceRain === 0) {
+            return { status: 'WET', color: 'red', emoji: '🔴',
+                message: hourlyLagged ? `Rain today (${unaccountedRain.toFixed(1)}mm, data updating)` : 'Raining now',
+                safe: false, accumulatedRain: null, avgHumidity: currentWeather ? currentWeather.humidity : null,
+                hoursSinceRain: 0, minDaytimeHumidity: null, rawData: data };
         }
 
         // --- Rain severity score (0-3): max of peak-hour score and sustained-12h score ---
@@ -649,6 +782,7 @@ function initWeatherModule() {
         let nightHumSum   = 0, nightHumCount   = 0;
         let skatingDewSum = 0, skatingDewCount = 0;
         let skatingWindSum = 0, skatingWindCount = 0;
+        let skatingTempSum = 0, skatingTempCount = 0;
         let nightDewSum   = 0, nightDewCount   = 0;
         let minSkatingHum = null;
         let minSkatingDew = null;
@@ -678,6 +812,7 @@ function initWeatherModule() {
                     if (minSkatingDew === null || h.dewpoint < minSkatingDew) minSkatingDew = h.dewpoint;
                 }
                 if (h.wind !== null) { skatingWindSum += h.wind; skatingWindCount++; }
+                if (h.temp !== null) { skatingTempSum += h.temp; skatingTempCount++; }
             } else {
                 nightHumSum += h.humidity; nightHumCount++;
                 if (h.dewpoint !== null) { nightDewSum += h.dewpoint; nightDewCount++; }
@@ -686,6 +821,7 @@ function initWeatherModule() {
 
         const avgSkatingHumidity = skatingHumCount > 0 ? Math.round(skatingHumSum / skatingHumCount) : null;
         const avgSkatingWind = skatingWindCount > 0 ? Math.round(skatingWindSum / skatingWindCount) : null;
+        const avgSkatingTemp = skatingTempCount > 0 ? Math.round(skatingTempSum / skatingTempCount) : null;
         const avgNightHumidity   = nightHumCount   > 0 ? Math.round(nightHumSum   / nightHumCount)   : null;
         const avgNightDewpoint   = nightDewCount   > 0 ? parseFloat((nightDewSum  / nightDewCount).toFixed(1))  : null;
         const minDaytimeDewpoint = minSkatingDew;
@@ -745,6 +881,23 @@ function initWeatherModule() {
             else if (avgSkatingWind < 5 && minDaytimeHumidity > 75) windMod = +1;
         }
 
+        // --- Temperature-scaled drying power (applies beyond the 2h hard lock only — ---
+        // --- that lock stays unconditional regardless of conditions) ---
+        // Ambient drying modifiers (dew-point gap, wind) are only as effective as the
+        // temperature allows: cold air has little real drying power even when windy/dry
+        // (so a quick wet->dry swing shouldn't be trusted in winter), while warm air dries
+        // genuinely fast (so summer conditions should be allowed to dry out sooner than
+        // winter ones). Only ever weakens or strengthens an already-drying modifier —
+        // never turns a dampening modifier into a drying one.
+        const scaleDrying = (mod) => {
+            if (mod >= 0 || avgSkatingTemp === null) return mod;
+            if (avgSkatingTemp < 5)  return 0;       // cold: negligible drying power
+            if (avgSkatingTemp > 15) return mod - 1; // warm: amplified drying power
+            return mod;                              // mild: unchanged
+        };
+        dewMod = scaleDrying(dewMod);
+        windMod = scaleDrying(windMod);
+
         // Frost note (informational only — not a severity change, just UI flag)
         const frostWarning = (currentWeather && currentWeather.temp <= 3 && minDaytimeDewpoint !== null && minDaytimeDewpoint < 0);
 
@@ -769,6 +922,7 @@ function initWeatherModule() {
             maxRainAmount:  parseFloat(maxRainAmount.toFixed(2)),
             totalRain12h:   parseFloat(totalRain12h.toFixed(1)),
             rainSeverity,
+            rainDurationHours,
             hourlyLagged,
             unaccountedRain: parseFloat((unaccountedRain||0).toFixed(1)),
             todaySkatingStart,
@@ -779,9 +933,7 @@ function initWeatherModule() {
 
         const rainAgoMsg = (h) => {
             if (hourlyLagged && h === 0) return `Rain today (${unaccountedRain.toFixed(1)}mm, data updating)`;
-            if (h === 0) return 'Raining now';
-            if (h < 24) return `Rain ${h}h ago`;
-            return `Rain ${Math.floor(h/24)}d ago`;
+            return this._formatHoursSinceRainMessage(h);
         };
 
         // Helper: clamp a status given modifiers
@@ -795,12 +947,12 @@ function initWeatherModule() {
         };
 
         // --- No recent rain path ---
-        // Still check humidity/dew point — handles persistent damp without measurable rain (CPP case)
+        // Still check humidity/dew point — handles persistent damp without measurable rain (CPP case).
+        // No rain in the window → modifiers may only dry things out, never manufacture wetness;
+        // humidity alone is capped below WET (no path to WET without actual rain).
         if (hoursSinceRain === null) {
-            let base = 0; // DRY
-            if (minDaytimeHumidity > 85)      base = 2; // WET
-            else if (minDaytimeHumidity > 78) base = 1; // PATCHY
-            const result = applyMods(base, dewMod, deltaMod, windMod);
+            const base = minDaytimeHumidity > 78 ? 1 : 0; // DRY or PATCHY only
+            const result = applyMods(base, Math.min(0, dewMod), Math.min(0, deltaMod), Math.min(0, windMod));
             const message = result.status === 'DRY' ? 'No rain 3+ days' : 'No rain · persistent damp';
             return this._applySkatingWindowOverride({ ...result, message, safe: result.status==='DRY', ...extras }, data, hourly, daily, now);
         }
@@ -809,21 +961,36 @@ function initWeatherModule() {
         // Uses rainSeverity (0-3) + minDaytimeHumidity (78%/85% thresholds) + modifiers
 
         // 0–6h: WET if meaningful rain, PATCHY if trace rain
-        // No modifiers during/just after active rain — wind/dew don't override wet road
+        // No modifiers during/just after active rain — wind/dew don't override wet road.
+        // Exception: light, brief rain (severity 1, under ~12h of actual rain) doesn't
+        // leave the same soaking as sustained or heavy rain, so it's allowed a PATCHY
+        // floor instead of WET once past a shorter no-exceptions window.
         if (hoursSinceRain < 6) {
+            const lightBriefRain = rainSeverity === 1 && rainDurationHours < 12;
+
             let base;
-            if      (rainSeverity >= 2 || minDaytimeHumidity > 85) base = 2;
-            else if (rainSeverity >= 1 || minDaytimeHumidity > 78) base = 2;
-            else                                          base = 1; // trace rain only
+            if      (lightBriefRain)                                base = 1; // light, brief: PATCHY floor
+            else if (rainSeverity >= 2 || minDaytimeHumidity > 85)   base = 2;
+            else if (rainSeverity >= 1 || minDaytimeHumidity > 78)   base = 2;
+            else                                                      base = 1; // trace rain only
+
             // Modifiers apply only when rain was light and some time has passed
-            if (hoursSinceRain < 2 || rainSeverity >= 1) {
+            const noExceptionsWindow = lightBriefRain ? 1 : 2;
+            if (hoursSinceRain < noExceptionsWindow || (!lightBriefRain && rainSeverity >= 1)) {
                 // Active/recent meaningful rain — no modifier softening
                 const idx = Math.max(0, Math.min(2, base));
                 const BANDS2 = ['DRY','PATCHY','WET'];
                 return { status: BANDS2[idx], color: ['green','yellow','red'][idx], emoji: ['🟢','🟡','🔴'][idx],
                     message: rainAgoMsg(hoursSinceRain), safe: false, ...extras };
             }
-            const result = applyMods(base, dewMod, windMod);
+            // Light, brief rain's ambient modifiers may only dry things out further,
+            // never push it back up toward WET — same rule as the no-rain-relevant
+            // bands, since a short light shower doesn't leave the same soaking a
+            // modifier should be allowed to "slow the drying of" (found 2026-11-12:
+            // calm+humid windMod was silently re-inflating PATCHY back to WET here).
+            const result = lightBriefRain
+                ? applyMods(base, Math.min(0, dewMod), Math.min(0, windMod))
+                : applyMods(base, dewMod, windMod);
             return this._applySkatingWindowOverride({ ...result, message: rainAgoMsg(hoursSinceRain), safe: false, ...extras }, data, hourly, daily, now);
         }
 
@@ -858,8 +1025,10 @@ function initWeatherModule() {
             return this._applySkatingWindowOverride({ ...result, message: rainAgoMsg(hoursSinceRain), safe: result.status==='DRY', ...extras }, data, hourly, daily, now);
         }
 
-        // 48h+: DRY unless modifiers push it up
-        const { status, color, emoji } = applyMods(0, dewMod, deltaMod, windMod);
+        // 48h+: DRY unless modifiers push it up. Base stays hardcoded DRY (unchanged) —
+        // but modifiers are now dry-only, so they can no longer manufacture PATCHY/WET
+        // from ambient humidity/wind/dew alone with zero rain involved.
+        const { status, color, emoji } = applyMods(0, Math.min(0, dewMod), Math.min(0, deltaMod), Math.min(0, windMod));
         return this._applySkatingWindowOverride({ status, color, emoji, message: rainAgoMsg(hoursSinceRain), safe: status==='DRY', ...extras }, data, hourly, daily, now);
     };
 
@@ -895,23 +1064,34 @@ function initWeatherModule() {
 
         // Track lastRainIdx scanning forward through hourly to compute hoursSinceRain per slot
         let lastRainTime = baseResult.lastRainTime || null;
+        let lastRainIdxLocal = null;
 
         for (let i = 0; i < hourly.time.length; i++) {
             const raw = hourly.time[i];
             const t = parseLocalTime(raw);
 
             if (t <= now) {
-                if ((hourly.precipitation[i] || 0) > 0.1) lastRainTime = t;
+                if ((hourly.precipitation[i] || 0) > 0.1) { lastRainTime = t; lastRainIdxLocal = i; }
                 continue;
             }
             if (t < remainingStart || t > skWinEnd) continue;
 
             const precip = hourly.precipitation[i] || 0;
-            if (precip > 0.1) lastRainTime = t;
+            if (precip > 0.1) { lastRainTime = t; lastRainIdxLocal = i; }
 
             const hsr = lastRainTime !== null
                 ? (precip > 0.1 ? 0 : Math.round((t - lastRainTime) / 3600000))
                 : null;
+
+            // Rain duration: consecutive hours of actual rain ending at lastRainIdxLocal —
+            // distinct from severity (intensity/total amount).
+            let rainDurationHours = 0;
+            if (lastRainIdxLocal !== null) {
+                for (let k = lastRainIdxLocal; k >= 0; k--) {
+                    if ((hourly.precipitation[k] || 0) > 0.1) rainDurationHours++;
+                    else break;
+                }
+            }
 
             // Rolling 12h severity
             const cutoff12h = new Date(t.getTime() - 12 * 3600000);
@@ -931,8 +1111,9 @@ function initWeatherModule() {
             const hum  = hourly.relative_humidity_2m[i] || 0;
             const dew  = hourly.dewpoint_2m ? (hourly.dewpoint_2m[i] ?? null) : null;
             const wind = hourly.windspeed_10m ? (hourly.windspeed_10m[i] ?? null) : null;
+            const temp = hourly.temperature_2m ? (hourly.temperature_2m[i] ?? null) : null;
 
-            skatingHourScores.push(this.scoreHourCondition(hsr, sev, hum, dew, wind));
+            skatingHourScores.push(this.scoreHourCondition(hsr, sev, hum, dew, wind, temp, rainDurationHours));
         }
 
         if (skatingHourScores.length === 0) return baseResult;
