@@ -324,10 +324,37 @@ h1 {
    time / road-condition dot / precip / humidity / dew point, same class names,
    colours adapted for this app's dark theme (main app is light-themed). */
 .upcoming-hour {
+    position: relative;
     text-align: center;
     padding: 0.5rem 0.1rem;
     border-radius: 8px;
     font-size: 0.6rem;
+}
+
+/* NOW line — vertical marker positioned proportionally inside the current slot
+   box, ported from the main app's uiModule.js (same class name/behaviour). */
+.now-line {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    background: #e65100;
+    border-radius: 1px;
+    z-index: 10;
+    pointer-events: none;
+}
+.now-line::before {
+    content: 'now';
+    position: absolute;
+    top: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.5rem;
+    font-weight: 700;
+    color: #e65100;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
 }
 
 .upcoming-hour.fh-empty-slot {

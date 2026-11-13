@@ -260,12 +260,16 @@ let openDayIdx = null;
 const humC = h => h == null ? 'rdv-grey' : h < 70 ? 'rdv-green' : h < 78 ? 'rdv-lime' : h < 85 ? 'rdv-yellow' : 'rdv-red';
 const dewC = d => d == null ? 'rdv-grey' : d < 5 ? 'rdv-green' : d < 10 ? 'rdv-lime' : d < 15 ? 'rdv-yellow' : 'rdv-red';
 
-function renderHourBox(hour, slot, hourScores) {
+function renderHourBox(hour, slot, hourScores, nowPct) {
     const timeLabel = String(hour).padStart(2, '0') + ':00';
+    const nowLineHtml = (nowPct !== null && nowPct !== undefined)
+        ? `<div class="now-line" style="left:${nowPct}%"></div>`
+        : '';
 
     if (!slot) {
         return `
             <div class="upcoming-hour upcoming-forecast fh-empty-slot">
+                ${nowLineHtml}
                 <div class="upcoming-time">${timeLabel}</div>
             </div>
         `;
@@ -294,6 +298,7 @@ function renderHourBox(hour, slot, hourScores) {
 
     return `
         <div class="upcoming-hour ${rainClass}">
+            ${nowLineHtml}
             <div class="upcoming-time">${timeLabel}</div>
             <div class="weather-cond-dot weather-cond-${color}" title="Road condition"></div>
             <div class="upcoming-precip" title="Precipitation">${hasRain ? slot.precip.toFixed(1) + 'mm' : '—'}</div>
@@ -323,8 +328,33 @@ function toggleForecastDetail(day, dayEl) {
     const slotByHour = {};
     slots.forEach(s => { slotByHour[s.t.getHours()] = s; });
 
+    // NOW line: find which 2h box (if any, today only) contains the current time,
+    // and how far through that box "now" is — ported from the main app's
+    // uiModule.js day-detail strip (same nowSlotIdx/nowPct behaviour).
+    const todayMidnight = new Date(now); todayMidnight.setHours(0, 0, 0, 0);
+    const isToday = dayDate.getTime() === todayMidnight.getTime();
+    let nowSlotHour = null, nowPct = null;
+    if (isToday) {
+        for (const h of TARGET_HOURS) {
+            const slotStart = new Date(dayDate); slotStart.setHours(h, 0, 0, 0);
+            const slotEnd = new Date(slotStart.getTime() + 2 * 3600000);
+            if (now >= slotStart && now < slotEnd) {
+                nowSlotHour = h;
+                nowPct = Math.round(((now - slotStart) / (2 * 3600000)) * 100);
+                break;
+            }
+        }
+        // If now is past all slots (e.g. checked at 23:xx), put the line at the
+        // right edge of the last slot instead of showing nothing.
+        if (nowSlotHour === null) {
+            const lastHour = TARGET_HOURS[TARGET_HOURS.length - 1];
+            const lastSlotStart = new Date(dayDate); lastSlotStart.setHours(lastHour, 0, 0, 0);
+            if (now >= lastSlotStart) { nowSlotHour = lastHour; nowPct = 100; }
+        }
+    }
+
     const hourRows = TARGET_HOURS.map(hour =>
-        renderHourBox(hour, slotByHour[hour] || null, day.hourScores)
+        renderHourBox(hour, slotByHour[hour] || null, day.hourScores, hour === nowSlotHour ? nowPct : null)
     ).join('');
 
     forecastDetailEl.innerHTML = `
