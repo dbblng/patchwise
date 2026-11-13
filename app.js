@@ -28,7 +28,8 @@ function parseLocalTime(raw) {
 
 // Builds the 2h-paired slots for a given calendar day, matching uiModule.js exactly:
 // precip summed, humidity/dew taken as the max (worst case) across the pair.
-function buildDaySlots(dayDate, now) {
+// skStart/skEnd (optional) mark the day's skating window for the inSkWin flag.
+function buildDaySlots(dayDate, now, skStart, skEnd) {
     const dayEnd = new Date(dayDate.getTime() + 24 * 3600000);
     const rawSlots = [];
     for (let i = 0; i < rawHourly.time.length; i++) {
@@ -58,7 +59,10 @@ function buildDaySlots(dayDate, now) {
         const dew = (h0.dew !== null && h1 && h1.dew !== null)
             ? Math.max(h0.dew, h1.dew)
             : (h0.dew !== null ? h0.dew : (h1 ? h1.dew : null));
-        return { t: h0.t, precip, hum, dew, isFuture: h0.t > now, i0: h0.i };
+        const inSkWin = skStart && skEnd
+            ? (h0.t >= skStart && h0.t < skEnd) || (h1 && h1.t >= skStart && h1.t < skEnd)
+            : false;
+        return { t: h0.t, precip, hum, dew, isFuture: h0.t > now, inSkWin, i0: h0.i };
     });
 }
 
@@ -158,6 +162,12 @@ function renderResult(lat, lng, label, data) {
     const slotStatus  = { green: 'DRY', yellow: 'PATCHY', red: 'WET' }[slotColor] || road.status;
     const slotMessage = (slot && slot.message) || road.message;
 
+    const lagNote = road.hourlyLagged ? ` <span class="road-lag-inline">⚠️ +${road.unaccountedRain}mm lag</span>` : '';
+    const skWin = (road.todaySkatingStart && road.todaySkatingEnd)
+        ? new Date(road.todaySkatingStart).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + '–' + new Date(road.todaySkatingEnd).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+        : null;
+    const omLink = `<a class="road-detail-link" href="https://open-meteo.com/en/docs#latitude=${lat}&longitude=${lng}" target="_blank">Open-Meteo →</a>`;
+
     resultEl.innerHTML = `
         <div class="location-name">${label || 'Selected location'}</div>
         <div class="coords">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
@@ -172,15 +182,17 @@ function renderResult(lat, lng, label, data) {
                     ${current ? `${current.weatherEmoji || ''} ${current.temp}°C &middot; ${current.humidity}% &middot; ${current.windSpeed}km/h` : ''}
                 </div>
                 <div class="chips">
-                    <span class="chip">💧 ${hrsVal} dry</span>
-                    <span class="chip">12h ${road.totalRain12h != null ? road.totalRain12h + 'mm' : '--'}</span>
-                    <span class="chip">48h ${road.accumulatedRain != null ? road.accumulatedRain + 'mm' : '--'}</span>
-                    <span class="chip">sev ${road.rainSeverity != null ? road.rainSeverity + '/3' : '--'}</span>
-                    <span class="chip">peak ${road.maxRainAmount != null ? road.maxRainAmount + 'mm/h' : '--'}</span>
-                    <span class="chip">hum ${road.minDaytimeHumidity != null ? road.minDaytimeHumidity + '%' : '--'}</span>
-                    <span class="chip">&Delta;${road.humidityDelta != null ? road.humidityDelta : '--'}</span>
-                    <span class="chip">dew ${road.minDaytimeDewpoint != null ? road.minDaytimeDewpoint + '&deg;C' : '--'}</span>
-                    <span class="chip">💨 ${road.avgSkatingWind != null ? road.avgSkatingWind + 'km/h' : '--'}</span>
+                    <span class="chip ${hrsC(road.hoursSinceRain)}">💧 ${hrsVal} dry</span>${lagNote}
+                    <span class="chip ${rain12C(road.totalRain12h)}">12h ${road.totalRain12h != null ? road.totalRain12h + 'mm' : '--'}</span>
+                    <span class="chip ${rain48C(road.accumulatedRain)}">48h ${road.accumulatedRain != null ? road.accumulatedRain + 'mm' : '--'}</span>
+                    <span class="chip ${sev3C(road.rainSeverity)}">sev ${road.rainSeverity != null ? road.rainSeverity + '/3' : '--'}</span>
+                    <span class="chip ${peakC(road.maxRainAmount)}">peak ${road.maxRainAmount != null ? road.maxRainAmount + 'mm/h' : '--'}</span>
+                    <span class="chip ${humC(road.minDaytimeHumidity)}">hum ${road.minDaytimeHumidity != null ? road.minDaytimeHumidity + '%' : '--'}</span>
+                    <span class="chip ${deltaC(road.humidityDelta)}">&Delta;${road.humidityDelta != null ? road.humidityDelta : '--'}</span>
+                    <span class="chip ${dewC(road.minDaytimeDewpoint)}">dew ${road.minDaytimeDewpoint != null ? road.minDaytimeDewpoint + '&deg;C' : '--'}${road.frostWarning ? ' ⚠️' : ''}</span>
+                    <span class="chip ${windC(road.avgSkatingWind, road.windMod)}">💨 ${road.avgSkatingWind != null ? road.avgSkatingWind + 'km/h' : '--'}${road.windMod === -1 ? ' dry↑' : road.windMod === 1 ? ' still↓' : ''}</span>
+                    ${skWin ? `<span class="chip rdv-grey">🛹 ${skWin}</span>` : ''}
+                    ${omLink}
                 </div>
             </div>
         </div>
@@ -218,16 +230,20 @@ let currentDays = []; // unified list: [{...day, isPast}]
 function renderForecastStrip(data) {
     if (!data.forecast || !data.forecast.length) return;
 
-    const pastDays = (data.past ? [...data.past].reverse() : []).map(day => ({ ...day, isPast: true }));
-    const forecastDays = data.forecast.map(day => ({ ...day, isPast: false }));
+    const todayMidnight = new Date(); todayMidnight.setHours(0, 0, 0, 0);
+    const isTodayDate = (d) => { const dd = new Date(d); dd.setHours(0, 0, 0, 0); return dd.getTime() === todayMidnight.getTime(); };
+
+    const pastDays = (data.past ? [...data.past].reverse() : []).map(day => ({ ...day, isPast: true, isToday: false }));
+    const forecastDays = data.forecast.map(day => ({ ...day, isPast: false, isToday: isTodayDate(day.date) }));
     currentDays = [...pastDays, ...forecastDays];
 
     forecastStripEl.innerHTML = currentDays.map((day, idx) => {
+        const dayName = day.isToday ? 'Today' : day.dayName;
         if (day.isPast) {
             const sub = day.precipitation > 0.1 ? day.precipitation.toFixed(1) + 'mm' : 'dry';
             return `
                 <div class="forecast-day past-day" data-idx="${idx}">
-                    <div class="fd-name">${day.dayName}</div>
+                    <div class="fd-name">${dayName}</div>
                     <div class="fd-weather">${day.weatherEmoji || ''} ${day.tempMin}&ndash;${day.tempMax}&deg;</div>
                     <div class="fd-dot fd-grey">⚪</div>
                     <div class="fd-status">${sub}</div>
@@ -236,8 +252,8 @@ function renderForecastStrip(data) {
         }
         const fc = day.forecastCondition || { color: 'grey', emoji: '⚪', status: '--' };
         return `
-            <div class="forecast-day" data-idx="${idx}">
-                <div class="fd-name">${day.dayName}</div>
+            <div class="forecast-day${day.isToday ? ' fd-today' : ''}" data-idx="${idx}">
+                <div class="fd-name">${dayName}</div>
                 <div class="fd-weather">${day.weatherEmoji || ''} ${day.tempMin}&ndash;${day.tempMax}&deg;</div>
                 <div class="fd-dot fd-${fc.color}">${fc.emoji}</div>
                 <div class="fd-status">${fc.status}</div>
@@ -256,9 +272,16 @@ function renderForecastStrip(data) {
 
 let openDayIdx = null;
 
-// Same tiers as uiModule.js's humC/dewC
-const humC = h => h == null ? 'rdv-grey' : h < 70 ? 'rdv-green' : h < 78 ? 'rdv-lime' : h < 85 ? 'rdv-yellow' : 'rdv-red';
-const dewC = d => d == null ? 'rdv-grey' : d < 5 ? 'rdv-green' : d < 10 ? 'rdv-lime' : d < 15 ? 'rdv-yellow' : 'rdv-red';
+// Same tiers as uiModule.js's chip colour classifiers
+const humC    = h => h == null ? 'rdv-grey' : h < 70 ? 'rdv-green' : h < 78 ? 'rdv-lime' : h < 85 ? 'rdv-yellow' : 'rdv-red';
+const dewC    = d => d == null ? 'rdv-grey' : d < 5 ? 'rdv-green' : d < 10 ? 'rdv-lime' : d < 15 ? 'rdv-yellow' : 'rdv-red';
+const hrsC    = h => h === null || h === undefined ? 'rdv-grey' : h === 0 ? 'rdv-red' : h < 6 ? 'rdv-red' : h < 12 ? 'rdv-orange' : h < 24 ? 'rdv-yellow' : h < 48 ? 'rdv-lime' : 'rdv-green';
+const rain12C = r => r == null ? 'rdv-grey' : r < 1 ? 'rdv-green' : r < 3 ? 'rdv-lime' : r < 8 ? 'rdv-yellow' : 'rdv-red';
+const rain48C = r => r == null ? 'rdv-grey' : r < 2 ? 'rdv-green' : r < 8 ? 'rdv-lime' : r < 20 ? 'rdv-yellow' : 'rdv-red';
+const sev3C   = s => s == null ? 'rdv-grey' : s === 0 ? 'rdv-green' : s === 1 ? 'rdv-lime' : s === 2 ? 'rdv-yellow' : 'rdv-red';
+const peakC   = r => r == null ? 'rdv-grey' : r < 1 ? 'rdv-green' : r < 3 ? 'rdv-lime' : r < 6 ? 'rdv-yellow' : 'rdv-red';
+const deltaC  = d => d == null ? 'rdv-grey' : d > 20 ? 'rdv-green' : d > 10 ? 'rdv-lime' : d > 5 ? 'rdv-yellow' : 'rdv-red';
+const windC   = (w, wMod) => w == null ? 'rdv-grey' : w > 20 ? 'rdv-green' : w < 5 && wMod === 1 ? 'rdv-red' : 'rdv-grey';
 
 function renderHourBox(hour, slot, hourScores, nowPct) {
     const timeLabel = String(hour).padStart(2, '0') + ':00';
@@ -295,9 +318,10 @@ function renderHourBox(hour, slot, hourScores, nowPct) {
 
     const hasRain = slot.precip > 0.1;
     const rainClass = hasRain ? 'upcoming-rain' : (slot.isFuture ? 'upcoming-forecast' : 'upcoming-dry');
+    const skClass = slot.inSkWin ? ' road-hour-skwin' : '';
 
     return `
-        <div class="upcoming-hour ${rainClass}">
+        <div class="upcoming-hour ${rainClass}${skClass}">
             ${nowLineHtml}
             <div class="upcoming-time">${timeLabel}</div>
             <div class="weather-cond-dot weather-cond-${color}" title="Road condition"></div>
@@ -324,7 +348,9 @@ function toggleForecastDetail(day, dayEl) {
     const now = new Date();
     const dayDate = new Date(day.date);
     dayDate.setHours(0, 0, 0, 0);
-    const slots = rawHourly ? buildDaySlots(dayDate, now) : [];
+    const skStart = day.skatingStart ? new Date(day.skatingStart) : null;
+    const skEnd   = day.skatingEnd   ? new Date(day.skatingEnd)   : null;
+    const slots = rawHourly ? buildDaySlots(dayDate, now, skStart, skEnd) : [];
     const slotByHour = {};
     slots.forEach(s => { slotByHour[s.t.getHours()] = s; });
 

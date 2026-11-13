@@ -274,6 +274,13 @@ h1 {
     border-color: #2563eb;
 }
 
+.forecast-day.fd-today {
+    border-color: #e65100;
+}
+.forecast-day.fd-today .fd-name {
+    color: #e65100;
+}
+
 .forecast-day.past-day .fd-dot {
     opacity: 0.6;
 }
@@ -385,5 +392,26 @@ h1 {
 .rdv-green  { color: #81c784; font-weight: 700; }
 .rdv-lime   { color: #c0ca33; font-weight: 700; }
 .rdv-yellow { color: #ffb74d; font-weight: 700; }
+.rdv-orange { color: #ff8a65; font-weight: 700; }
 .rdv-red    { color: #e57373; font-weight: 700; }
 .rdv-grey   { color: #888; font-weight: 400; }
+
+/* Chip colour tiers — same classes as above, but with a tinted pill background,
+   matching uiModule.js's .road-algo-chip.rdv-* combined selectors (dark theme). */
+.chip.rdv-green  { background: rgba(129,199,132,0.15); border-color: rgba(129,199,132,0.4); color: #81c784; }
+.chip.rdv-lime   { background: rgba(192,202,51,0.15);  border-color: rgba(192,202,51,0.4);  color: #c0ca33; }
+.chip.rdv-yellow { background: rgba(255,183,77,0.15);  border-color: rgba(255,183,77,0.4);  color: #ffb74d; }
+.chip.rdv-orange { background: rgba(255,138,101,0.15); border-color: rgba(255,138,101,0.4); color: #ff8a65; }
+.chip.rdv-red    { background: rgba(229,115,115,0.15); border-color: rgba(229,115,115,0.4); color: #e57373; }
+.chip.rdv-grey   { background: #1c1c1c; border-color: #333; color: #ccc; }
+
+.road-lag-inline { color: #ffb74d; font-weight: 700; font-size: 0.75rem; }
+
+/* Skating window highlight in hourly strip — matches uiModule.js, brightened for dark bg */
+.road-hour-skwin {
+    background: rgba(66, 165, 245, 0.12);
+    border-top: 2px solid rgba(66, 165, 245, 0.4);
+}
+
+.road-detail-link { color: #60a5fa; font-size: 0.75rem; text-decoration: none; }
+.road-detail-link:hover { text-decoration: underline; }
