@@ -108,6 +108,18 @@ h1 {
     justify-content: center;
 }
 
+/* Experimental sun/road exposure line — display-only, not yet used in predictions */
+.sun-exposure {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 8px;
+    background: #1c1c1c;
+    border: 1px dashed #444;
+    font-size: 0.75rem;
+    color: #ccc;
+    text-align: center;
+}
+
 .road-box.road-green { border-color: #22c55e; }
 .road-box.road-yellow { border-color: #eab308; }
 .road-box.road-red { border-color: #ef4444; }

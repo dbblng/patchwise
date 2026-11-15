@@ -14,6 +14,7 @@ let lastCheck = null; // { lat, lng, label, road, hrsVal, slotStatus, checkedAt 
 let selectedObserved = null;
 let rawHourly = null;
 let allHourScores = null; // unified hour-score lookup from processForecast, covers every hour
+let lastSunExposureText = ''; // plain-text sun/road exposure line, for the Trello summary
 
 // Mirrors weatherModule.js's internal parseLocalTime — replicated here rather than
 // touching the shared algorithm file for a display-only lookup.
@@ -24,6 +25,171 @@ function parseLocalTime(raw) {
     const [yr, mo, dy] = datePart.split('-').map(Number);
     const [hr, mn] = timePart.split(':').map(Number);
     return new Date(yr, mo - 1, dy, hr, mn, 0, 0);
+}
+
+// ============================================================================
+// EXPERIMENTAL — sun/road exposure (added 2026-11-15, display-only for now).
+// Not wired into the WET/PATCHY/DRY prediction yet — this is purely informational
+// until field-tested against real observations, same discipline as every other
+// change to this algorithm: validate against reality before trusting it.
+//
+// Idea: a road's own compass bearing, compared against the sun's azimuth at the
+// checked time, approximates whether the sun shines "down the road" (more likely
+// exposed) or "across it" (more likely blocked by whatever's alongside it — this
+// is a proxy, not real shadow-casting against actual buildings/terrain, which
+// would need a paid/gated third-party service we don't have access to).
+// ============================================================================
+
+// Sun position (altitude + azimuth) for a given moment/location. Standard
+// astronomical formulas (the same ones behind the widely-used SunCalc library) —
+// public-domain math, no external API, accurate to well within what this needs.
+function getSunPosition(date, lat, lng) {
+    const rad = Math.PI / 180;
+    const dayMs = 86400000;
+    const J2000 = 2451545;
+    const toDays = (d) => (d.valueOf() / dayMs - 0.5 + 2440588) - J2000;
+
+    const d = toDays(date);
+    const M = rad * (357.5291 + 0.98560028 * d);
+    const C = rad * (1.9148 * Math.sin(M) + 0.0200 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+    const P = rad * 102.9372;
+    const L = M + C + P + Math.PI;
+    const e = rad * 23.4397;
+    const dec = Math.asin(Math.sin(e) * Math.sin(L));
+    const ra = Math.atan2(Math.sin(L) * Math.cos(e), Math.cos(L));
+
+    const lw = rad * -lng;
+    const theta = rad * (280.1600 + 360.9856235 * d) - lw;
+    const H = theta - ra;
+
+    const phi = rad * lat;
+    const altitude = Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H));
+    const azimuthFromSouth = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+
+    // Convert from "measured from south, clockwise toward west" to standard
+    // compass bearing (0=N, 90=E, 180=S, 270=W).
+    let azimuth = (azimuthFromSouth / rad) + 180;
+    azimuth = ((azimuth % 360) + 360) % 360;
+
+    return { altitude: altitude / rad, azimuth };
+}
+
+// Great-circle bearing from point 1 to point 2, as a compass bearing (0-360).
+function computeBearing(lat1, lng1, lat2, lng2) {
+    const rad = Math.PI / 180;
+    const phi1 = lat1 * rad, phi2 = lat2 * rad, dLng = (lng2 - lng1) * rad;
+    const y = Math.sin(dLng) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+    let theta = Math.atan2(y, x) / rad;
+    return (theta + 360) % 360;
+}
+
+// How closely the sun's azimuth aligns with the road's own orientation. A road is
+// a line, not a one-way arrow, so bearing and bearing+180 are equivalent — this
+// folds everything down to a single 0-90 scale: 0 = sun shines straight down the
+// road (either direction), 90 = sun crosses the road at a right angle.
+function sunRoadAlignment(sunAzimuth, roadBearing) {
+    let diff = Math.abs(sunAzimuth - roadBearing) % 360;
+    if (diff > 180) diff = 360 - diff;
+    if (diff > 90) diff = 180 - diff;
+    return diff;
+}
+
+// Single Overpass attempt — returns the local road bearing, or null if no road
+// is found nearby, or throws on network/HTTP failure (caller handles retries).
+async function _tryFetchNearestRoadBearing(lat, lng) {
+    const query = `[out:json][timeout:8];way(around:40,${lat},${lng})["highway"];out geom;`;
+    const url = 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (!data.elements || !data.elements.length) return null;
+
+    // Pick the way with the geometry point closest to our location, then use
+    // the bearing between that point's neighbours as the local road direction.
+    let best = null;
+    for (const way of data.elements) {
+        if (!way.geometry || way.geometry.length < 2) continue;
+        for (let i = 0; i < way.geometry.length; i++) {
+            const p = way.geometry[i];
+            const dLat = p.lat - lat, dLng = p.lon - lng;
+            const distSq = dLat * dLat + dLng * dLng; // fine for comparing, this close
+            if (!best || distSq < best.distSq) best = { distSq, way, idx: i };
+        }
+    }
+    if (!best) return null;
+
+    const g = best.way.geometry;
+    const i = best.idx;
+    const prev = g[i - 1] || null;
+    const next = g[i + 1] || null;
+    const a = prev || g[i];
+    const b = next || g[i];
+    if (a === b) return null; // single-point way, no direction to compute
+    return computeBearing(a.lat, a.lon, b.lat, b.lon);
+}
+
+// Finds the nearest road to a point via Overpass (same free OSM data source Find
+// Steep already uses in the main app) and returns its local bearing, or null if
+// no road is found nearby or every attempt fails. The public Overpass endpoint
+// round-robins across several independently-run mirror servers, some of which can
+// intermittently fail/reject requests (confirmed 2026-11-15) — the main app's Find
+// Steep already retries for exactly this reason, so this does too, just lighter
+// since it's one small lookup rather than a bulk area search.
+async function fetchNearestRoadBearing(lat, lng) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            return await _tryFetchNearestRoadBearing(lat, lng);
+        } catch (e) {
+            if (attempt === 2) return null; // out of retries — degrade silently
+            await new Promise(r => setTimeout(r, 1500));
+        }
+    }
+    return null;
+}
+
+const compassLabel = (deg) => ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(deg / 22.5) % 16];
+
+// Fills in the #sun-exposure block after the main result is already shown —
+// progressive enhancement, never blocks or slows down the core weather check.
+// EXPERIMENTAL / display-only (see block comment above) — not used in the
+// road-condition prediction yet.
+async function renderSunExposure(lat, lng) {
+    const now = new Date();
+    const sun = getSunPosition(now, lat, lng);
+    const el = document.getElementById('sun-exposure');
+    if (!el) return; // user navigated away / re-checked before this resolved
+
+    if (sun.altitude <= 0) {
+        el.innerHTML = `☀️ Sun below horizon right now — no direct sun regardless of road direction`;
+        lastSunExposureText = 'Sun below horizon';
+        return;
+    }
+
+    const roadBearing = await fetchNearestRoadBearing(lat, lng);
+    const freshEl = document.getElementById('sun-exposure');
+    if (!freshEl) return; // still guard — the await may have taken a moment
+
+    const sunLine = `Sun: ${Math.round(sun.altitude)}&deg; above horizon, from ${compassLabel(sun.azimuth)}`;
+    const sunLineText = `sun ${Math.round(sun.altitude)}deg from ${compassLabel(sun.azimuth)}`;
+
+    if (roadBearing === null) {
+        freshEl.innerHTML = `☀️ ${sunLine} &middot; <span class="rdv-grey">no nearby road found</span>`;
+        lastSunExposureText = `${sunLineText}, no nearby road found`;
+        return;
+    }
+
+    const alignment = sunRoadAlignment(sun.azimuth, roadBearing);
+    let label, cls;
+    if (alignment < 30)      { label = 'likely exposed (sun down the road)';        cls = 'rdv-green'; }
+    else if (alignment < 60) { label = 'partial exposure';                          cls = 'rdv-yellow'; }
+    else                     { label = 'may be blocked (sun crosses the road)';     cls = 'rdv-red'; }
+
+    freshEl.innerHTML = `☀️ ${sunLine} &middot; road runs ${compassLabel(roadBearing)}&ndash;${compassLabel((roadBearing + 180) % 360)} &middot; <span class="${cls}">${label}</span>`;
+    lastSunExposureText = `${sunLineText}, road runs ${compassLabel(roadBearing)}-${compassLabel((roadBearing + 180) % 360)}, ${label} (alignment ${Math.round(alignment)}deg)`;
 }
 
 // Builds the 2h-paired slots for a given calendar day, matching uiModule.js exactly:
@@ -87,6 +253,7 @@ function resetUI(clearSearch) {
     lastCheck = null;
     rawHourly = null;
     allHourScores = null;
+    lastSunExposureText = '';
     openDayIdx = null;
     setStatus('');
     if (clearSearch) document.getElementById('search-input').value = '';
@@ -196,8 +363,10 @@ function renderResult(lat, lng, label, data) {
                 </div>
             </div>
         </div>
+        <div id="sun-exposure" class="sun-exposure">☀️ Checking sun exposure…</div>
     `;
     resultEl.classList.remove('hidden');
+    renderSunExposure(lat, lng);
 
     lastCheck = { lat, lng, label, road, hrsVal, slotStatus, slotMessage, checkedAt: new Date() };
 
@@ -219,6 +388,7 @@ function buildSummary() {
         `Predicted: ${slotStatus} (${slotMessage || ''})\n` +
         `hoursSinceRain: ${hrsVal}, sev: ${road.rainSeverity}/3, hum: ${road.minDaytimeHumidity}%, ` +
         `dew: ${road.minDaytimeDewpoint}°C, wind: ${road.avgSkatingWind}km/h, Δ: ${road.humidityDelta}\n` +
+        `Sun exposure (experimental, not in prediction): ${lastSunExposureText || 'n/a'}\n` +
         `Observed: ${selectedObserved || '(not set)'}\n` +
         `Notes: ${notes}`;
 }
