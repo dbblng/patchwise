@@ -21,7 +21,13 @@
    scales down for shorter skating windows — single unified calc, uiModule.js's
    separate aggregateDot deleted entirely; the two "actively raining" hard-lock
    early returns merged into one, moved below the ...extras computation so stat
-   chips never show undefined/null just because the hard lock fired).
+   chips never show undefined/null just because the hard lock fired; 2026-11-15
+   also fixed calculateRoadCondition's skating-window stats loop — it skipped
+   every hour before the single most recent rain event (meant to skip only
+   actively-raining hours), which on a two-rain-event day wiped out the whole
+   daytime skating window's dew/wind/temp data, nulling those modifiers and
+   forcing a stale PATCHY instead of the DRY a real dew-depression modifier
+   would have produced — now skips only hours with their own precip > 0.1).
    ========================================== */
 
 function initWeatherModule() {
@@ -774,8 +780,15 @@ function initWeatherModule() {
         // For each past hour, check against all daily windows in our data
         for (const h of pastHours) {
             if (h.time < cutoff48h) break;
-            // Skip hours during which it was still raining (not useful for drying assessment)
-            if (lastRainTime && h.time < lastRainTime) continue;
+            // Skip hours during which it was actively raining (not useful for drying
+            // assessment). Previously compared h.time < lastRainTime, which skipped
+            // EVERY hour before the single most recent rain event — on a day with two
+            // separate rain events (e.g. midday + evening), that wiped out the entire
+            // daytime skating window's dew/wind/temp stats, forcing them all null and
+            // zeroing out their drying modifiers (found 2026-11-15 via a field report
+            // where a light rain 3h ago should have resolved to DRY via a strong dew-
+            // depression modifier, but came back PATCHY with dew/wind/Δ all null).
+            if (h.precip > 0.1) continue;
 
             let inSkatingWindow = false;
             for (let di = 0; di < daily.time.length; di++) {
