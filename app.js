@@ -301,14 +301,25 @@ function getCurrentSlotColor(data, now) {
             const s0 = allHourScores[makeKey(t)];
             const t1 = nextI !== null ? parseLocalTime(rawHourly.time[nextI]) : null;
             const s1 = t1 ? allHourScores[makeKey(t1)] : null;
+            // Message travels with WHICHEVER hour actually determined the final
+            // colour below — previously this always used the even hour's message
+            // even when the odd hour was the worse one driving the colour, which
+            // could show e.g. "Rain 4h ago" while the odd hour's own data said
+            // "raining now" (found 2026-11-15, same category as the colour fix).
             let col = s0 ? s0.color : null;
-            if (s1 && colorRank[s1.color] > colorRank[col || 'green']) col = s1.color;
+            let message = s0 ? s0.message : null;
+            if (s1 && colorRank[s1.color] > colorRank[col || 'green']) {
+                col = s1.color;
+                message = s1.message;
+            }
             const p0 = rawHourly.precipitation[i] || 0;
             const p1 = nextI !== null ? (rawHourly.precipitation[nextI] || 0) : 0;
-            if ((p0 + p1) > 0.1) col = 'red';
-            // Message travels with the slot's own score so the subtext under the big
-            // dot can never contradict the hour that's actually driving its color.
-            const message = s0 ? s0.message : null;
+            if ((p0 + p1) > 0.1) {
+                col = 'red';
+                // Prefer whichever of the two hours actually has the rain for the message
+                if (p1 > 0.1 && s1 && s1.message) message = s1.message;
+                else if (p0 > 0.1 && s0 && s0.message) message = s0.message;
+            }
             return { color: col, message };
         }
     }
@@ -322,6 +333,9 @@ function renderResult(lat, lng, label, data) {
     const hrsVal = road.hoursSinceRain !== null && road.hoursSinceRain !== undefined
         ? (road.hoursSinceRain === 0 ? 'now' : road.hoursSinceRain + 'h')
         : '3d+';
+    // "{hrsVal} dry" reads as a contradiction when it's actively raining (e.g.
+    // "now dry") — word it conditionally instead (found 2026-11-15).
+    const hrsLabel = road.hoursSinceRain === 0 ? 'raining now' : `${hrsVal} since rain`;
 
     const slot = getCurrentSlotColor(data, new Date());
     const slotColor   = (slot && slot.color) || road.color;
@@ -349,7 +363,7 @@ function renderResult(lat, lng, label, data) {
                     ${current ? `${current.weatherEmoji || ''} ${current.temp}°C &middot; ${current.humidity}% &middot; ${current.windSpeed}km/h` : ''}
                 </div>
                 <div class="chips">
-                    <span class="chip ${hrsC(road.hoursSinceRain)}">💧 ${hrsVal} dry</span>${lagNote}
+                    <span class="chip ${hrsC(road.hoursSinceRain)}">💧 ${hrsLabel}</span>${lagNote}
                     <span class="chip ${rain12C(road.totalRain12h)}">12h ${road.totalRain12h != null ? road.totalRain12h + 'mm' : '--'}</span>
                     <span class="chip ${rain48C(road.accumulatedRain)}">48h ${road.accumulatedRain != null ? road.accumulatedRain + 'mm' : '--'}</span>
                     <span class="chip ${sev3C(road.rainSeverity)}">sev ${road.rainSeverity != null ? road.rainSeverity + '/3' : '--'}</span>

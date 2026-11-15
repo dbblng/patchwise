@@ -19,7 +19,9 @@
    scoreHourCondition's 2-6h bands; day-dot now weighted by box/skating-window
    overlap fraction instead of flat per-box counting, with a green bar that
    scales down for shorter skating windows — single unified calc, uiModule.js's
-   separate aggregateDot deleted entirely).
+   separate aggregateDot deleted entirely; the two "actively raining" hard-lock
+   early returns merged into one, moved below the ...extras computation so stat
+   chips never show undefined/null just because the hard lock fired).
    ========================================== */
 
 function initWeatherModule() {
@@ -644,13 +646,6 @@ function initWeatherModule() {
             return { status: 'UNKNOWN', color: 'gray', emoji: '⚪', message: 'No data' };
         }
 
-        // PRIORITY 1: Raining right now
-        if (currentWeather && currentWeather.precipitation > 0.1) {
-            return { status: 'WET', color: 'red', emoji: '🔴', message: 'Raining now',
-                safe: false, accumulatedRain: null, avgHumidity: currentWeather.humidity || null,
-                hoursSinceRain: 0, minDaytimeHumidity: null, rawData: data };
-        }
-
         const now = new Date();
         const hourly = data.hourly;
         const daily  = data.daily;
@@ -714,18 +709,6 @@ function initWeatherModule() {
         if (hourlyLagged && (hoursSinceRain === null || hoursSinceRain > 1)) {
             hoursSinceRain = 0;
             lastRainTime = now;
-        }
-
-        // PRIORITY 1b: hourly data shows rain in the current hour, even though the
-        // instantaneous "current weather" reading above missed it (nowcast vs. observed
-        // data can disagree). Same hard WET lock as PRIORITY 1 — the road is still
-        // physically wet regardless of how light the hourly amount looks, so severity
-        // thresholds must not be allowed to soften this down to PATCHY.
-        if (hoursSinceRain === 0) {
-            return { status: 'WET', color: 'red', emoji: '🔴',
-                message: hourlyLagged ? `Rain today (${unaccountedRain.toFixed(1)}mm, data updating)` : 'Raining now',
-                safe: false, accumulatedRain: null, avgHumidity: currentWeather ? currentWeather.humidity : null,
-                hoursSinceRain: 0, minDaytimeHumidity: null, rawData: data };
         }
 
         // --- Rain severity score (0-3): max of peak-hour score and sustained-12h score ---
@@ -935,6 +918,19 @@ function initWeatherModule() {
             if (hourlyLagged && h === 0) return `Rain today (${unaccountedRain.toFixed(1)}mm, data updating)`;
             return this._formatHoursSinceRainMessage(h);
         };
+
+        // PRIORITY 1: actively raining right now — hard WET lock, no modifier
+        // softening. Checks BOTH the instantaneous current-weather reading AND the
+        // hourly-derived signal (hoursSinceRain===0), since they can disagree (nowcast
+        // vs. observed data) — either one being true means the road is physically wet.
+        // Moved below the ...extras computation (was two separate early returns before
+        // any of pastHours/rainSeverity/skating-window stats were built) so the stat
+        // chips never show undefined/null just because this hard lock fired — found
+        // 2026-11-15 via a field report where sev/dew/wind/Δ all showed as missing.
+        if ((currentWeather && currentWeather.precipitation > 0.1) || hoursSinceRain === 0) {
+            return { status: 'WET', color: 'red', emoji: '🔴', message: rainAgoMsg(0),
+                safe: false, ...extras, hoursSinceRain: 0 };
+        }
 
         // Helper: clamp a status given modifiers
         const BANDS = ['DRY', 'PATCHY', 'WET'];
