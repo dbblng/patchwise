@@ -54,6 +54,18 @@ h1 {
     background: #333;
 }
 
+.btn-primary {
+    background: #22c55e;
+    color: #0a0a0a;
+    font-weight: 600;
+}
+
+.btn-primary:disabled {
+    background: #2a2a2a;
+    color: #888;
+    cursor: default;
+}
+
 .search-row {
     align-items: stretch;
 }
@@ -70,8 +82,8 @@ h1 {
     color: #f87171;
 }
 
-.result.hidden, .copy-row.hidden, .copy-confirm.hidden {
-    display: none;
+.hidden {
+    display: none !important;
 }
 
 .coords {

@@ -4,6 +4,7 @@ const statusEl = document.getElementById('status');
 const resultEl = document.getElementById('result');
 const copyRowEl = document.getElementById('copy-row');
 const copyConfirmEl = document.getElementById('copy-confirm');
+const sendConfirmEl = document.getElementById('send-confirm');
 const searchResultsEl = document.getElementById('search-results');
 const forecastStripEl = document.getElementById('forecast-strip');
 const forecastDetailEl = document.getElementById('forecast-detail');
@@ -241,6 +242,8 @@ function resetUI(clearSearch) {
     resultEl.classList.add('hidden');
     resultEl.innerHTML = '';
     copyRowEl.classList.add('hidden');
+    copyConfirmEl.classList.add('hidden');
+    sendConfirmEl.classList.add('hidden');
     observedBlockEl.classList.add('hidden');
     forecastStripEl.classList.add('hidden');
     forecastStripEl.innerHTML = '';
@@ -405,6 +408,67 @@ function buildSummary() {
         `Sun exposure (experimental, not in prediction): ${lastSunExposureText || 'n/a'}\n` +
         `Observed: ${selectedObserved || '(not set)'}\n` +
         `Notes: ${notes}`;
+}
+
+// One-tap field-observation submission, straight to a Google Form's public
+// formResponse endpoint — no Trello account needed for whoever is submitting,
+// no backend to host/maintain (just a fetch at a public, pre-existing Google
+// URL), and no third-party page is ever shown to the user. Responses land as
+// rows in a linked Sheet for later scoring + occasional manual import into
+// Trello's Field Log. Field order here must match the live form's questions —
+// see https://docs.google.com/forms/d/1orkKFGC2glro5wIUOKs0Tbwd8fqXA89hAPFUCWizKsE/edit
+const FORM_RESPONSE_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSe5Ve9vDPkIBb6hWzeQhFn6aUYNEHHwZI-sUwXDihXzMIKFvQ/formResponse';
+const FORM_ENTRY_IDS = {
+    timestamp: 'entry.634053571',
+    lat: 'entry.1461580274',
+    lng: 'entry.483605770',
+    predictedStatus: 'entry.1513791070',
+    hoursSinceRain: 'entry.1051012896',
+    rainSeverity: 'entry.1939293918',
+    humidity: 'entry.1303763267',
+    dewpoint: 'entry.1493940544',
+    wind: 'entry.108841274',
+    humidityDelta: 'entry.1914609970',
+    observedStatus: 'entry.633492427',
+    notes: 'entry.375802214'
+};
+
+async function sendObservation() {
+    if (!lastCheck) return;
+    if (!selectedObserved) {
+        setStatus('Tap Dry / Patchy / Wet above first.', true);
+        return;
+    }
+    const { lat, lng, road, hrsVal, slotStatus, checkedAt } = lastCheck;
+    const notes = notesInputEl.value.trim();
+
+    const body = new URLSearchParams();
+    body.set(FORM_ENTRY_IDS.timestamp, checkedAt.toLocaleString());
+    body.set(FORM_ENTRY_IDS.lat, lat.toFixed(5));
+    body.set(FORM_ENTRY_IDS.lng, lng.toFixed(5));
+    body.set(FORM_ENTRY_IDS.predictedStatus, slotStatus);
+    body.set(FORM_ENTRY_IDS.hoursSinceRain, String(hrsVal));
+    body.set(FORM_ENTRY_IDS.rainSeverity, String(road.rainSeverity));
+    body.set(FORM_ENTRY_IDS.humidity, String(road.minDaytimeHumidity));
+    body.set(FORM_ENTRY_IDS.dewpoint, String(road.minDaytimeDewpoint));
+    body.set(FORM_ENTRY_IDS.wind, String(road.avgSkatingWind));
+    body.set(FORM_ENTRY_IDS.humidityDelta, String(road.humidityDelta));
+    body.set(FORM_ENTRY_IDS.observedStatus, selectedObserved);
+    body.set(FORM_ENTRY_IDS.notes, notes);
+
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending…';
+    try {
+        await fetch(FORM_RESPONSE_URL, { method: 'POST', mode: 'no-cors', body });
+        sendConfirmEl.classList.remove('hidden');
+        setTimeout(() => sendConfirmEl.classList.add('hidden'), 2500);
+    } catch (e) {
+        setStatus('Could not send — check your connection and try again.', true);
+    } finally {
+        sendBtn.disabled = false;
+        sendBtn.textContent = '✅ Send observation';
+    }
 }
 
 const TARGET_HOURS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
@@ -639,6 +703,8 @@ document.querySelectorAll('.obs-btn').forEach(btn => {
         btn.classList.add('obs-selected');
     });
 });
+
+document.getElementById('send-btn').addEventListener('click', sendObservation);
 
 document.getElementById('copy-btn').addEventListener('click', async () => {
     try {
