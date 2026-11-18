@@ -11,6 +11,19 @@ const forecastDetailEl = document.getElementById('forecast-detail');
 const observedBlockEl = document.getElementById('observed-block');
 const notesInputEl = document.getElementById('notes-input');
 
+// Algo build identifier for scoring consistency — reuses the existing ?v= cache-bust
+// query string already maintained on every push (see index.html's reminder comment),
+// rather than introducing a second version marker to keep in sync by hand. Lets the
+// Sheet distinguish which weatherModule.js logic was actually live for a given
+// submission when comparing predicted-vs-observed across algo changes.
+const ALGO_VERSION = (() => {
+    try {
+        return new URL(document.currentScript.src).searchParams.get('v') || 'unknown';
+    } catch (e) {
+        return 'unknown';
+    }
+})();
+
 let lastCheck = null; // { lat, lng, label, road, hrsVal, slotStatus, checkedAt }
 let selectedObserved = null;
 let rawHourly = null;
@@ -430,7 +443,8 @@ const FORM_ENTRY_IDS = {
     wind: 'entry.108841274',
     humidityDelta: 'entry.1914609970',
     observedStatus: 'entry.633492427',
-    notes: 'entry.375802214'
+    notes: 'entry.375802214',
+    algoVersion: 'entry.715720663'
 };
 
 async function sendObservation() {
@@ -455,6 +469,7 @@ async function sendObservation() {
     body.set(FORM_ENTRY_IDS.humidityDelta, String(road.humidityDelta));
     body.set(FORM_ENTRY_IDS.observedStatus, selectedObserved);
     body.set(FORM_ENTRY_IDS.notes, notes);
+    body.set(FORM_ENTRY_IDS.algoVersion, ALGO_VERSION);
 
     const sendBtn = document.getElementById('send-btn');
     sendBtn.disabled = true;
