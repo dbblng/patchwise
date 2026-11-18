@@ -32,7 +32,13 @@
 
 function initWeatherModule() {
     const module = {
-        baseURL: 'https://api.open-meteo.com/v1/forecast'
+        baseURL: 'https://api.open-meteo.com/v1/forecast',
+        // Bump ONLY when calculateRoadCondition/scoreHourCondition's actual scoring
+        // logic changes — never for comments, UI-only edits, or unrelated fixes in
+        // this file. Distinct from index.html's ?v= cache-bust (which bumps on every
+        // push regardless of type) so a build/version display can show "which algo
+        // logic is live" without being muddied by unrelated UI changes.
+        ALGO_VERSION: '2026-11-15c'
     };
 
     /**

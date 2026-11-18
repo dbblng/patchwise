@@ -8,12 +8,13 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#111111">
 <title>Patchwise</title>
-<link rel="stylesheet" href="styles.css?v=20261118a">
+<link rel="stylesheet" href="styles.css?v=20261118b">
 </head>
 <body>
   <div class="app">
     <h1>🛹 Patchwise</h1>
     <p class="subtitle">Surface conditions for any spot, instantly.</p>
+    <p id="algo-version" class="algo-version"></p>
 
     <div class="input-row search-row">
       <button id="gps-btn" class="btn btn-icon" title="Use my location">📍</button>
@@ -38,10 +39,9 @@
 
     <div id="copy-row" class="copy-row hidden">
       <button id="send-btn" class="btn btn-primary">✅ Send observation</button>
-      <button id="copy-btn" class="btn btn-secondary">📋 Copy summary for Trello</button>
+      <button id="copy-btn" class="btn btn-secondary">📋 Copy data</button>
       <button id="reset-btn" class="btn btn-secondary">🔄 Reset</button>
       <span id="copy-confirm" class="copy-confirm hidden">Copied!</span>
-      <span id="send-confirm" class="copy-confirm hidden">Sent ✓</span>
     </div>
 
     <div id="forecast-strip" class="forecast-strip hidden"></div>
@@ -52,7 +52,7 @@
        for same-day pushes) — without it, phones/browsers can keep serving a cached
        copy indefinitely even after GitHub Pages has the new file (found 2026-11-14,
        cost a day of confusing field-test mismatches). -->
-  <script src="weatherModule.js?v=20261118a"></script>
-  <script src="app.js?v=20261118a"></script>
+  <script src="weatherModule.js?v=20261118b"></script>
+  <script src="app.js?v=20261118b"></script>
 </body>
 </html>

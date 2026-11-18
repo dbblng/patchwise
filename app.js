@@ -4,25 +4,18 @@ const statusEl = document.getElementById('status');
 const resultEl = document.getElementById('result');
 const copyRowEl = document.getElementById('copy-row');
 const copyConfirmEl = document.getElementById('copy-confirm');
-const sendConfirmEl = document.getElementById('send-confirm');
 const searchResultsEl = document.getElementById('search-results');
 const forecastStripEl = document.getElementById('forecast-strip');
 const forecastDetailEl = document.getElementById('forecast-detail');
 const observedBlockEl = document.getElementById('observed-block');
 const notesInputEl = document.getElementById('notes-input');
 
-// Algo build identifier for scoring consistency — reuses the existing ?v= cache-bust
-// query string already maintained on every push (see index.html's reminder comment),
-// rather than introducing a second version marker to keep in sync by hand. Lets the
-// Sheet distinguish which weatherModule.js logic was actually live for a given
-// submission when comparing predicted-vs-observed across algo changes.
-const ALGO_VERSION = (() => {
-    try {
-        return new URL(document.currentScript.src).searchParams.get('v') || 'unknown';
-    } catch (e) {
-        return 'unknown';
-    }
-})();
+// Algo build identifier for scoring consistency and on-page display — reads
+// weatherModule.ALGO_VERSION, which only changes when the actual scoring logic
+// changes (unlike index.html's ?v= cache-bust, which bumps on every push
+// including UI-only ones and would conflate the two).
+const ALGO_VERSION = weatherModule.ALGO_VERSION || 'unknown';
+document.getElementById('algo-version').textContent = `algo build ${ALGO_VERSION}`;
 
 let lastCheck = null; // { lat, lng, label, road, hrsVal, slotStatus, checkedAt }
 let selectedObserved = null;
@@ -256,7 +249,6 @@ function resetUI(clearSearch) {
     resultEl.innerHTML = '';
     copyRowEl.classList.add('hidden');
     copyConfirmEl.classList.add('hidden');
-    sendConfirmEl.classList.add('hidden');
     observedBlockEl.classList.add('hidden');
     forecastStripEl.classList.add('hidden');
     forecastStripEl.innerHTML = '';
@@ -476,13 +468,15 @@ async function sendObservation() {
     sendBtn.textContent = 'Sending…';
     try {
         await fetch(FORM_RESPONSE_URL, { method: 'POST', mode: 'no-cors', body });
-        sendConfirmEl.classList.remove('hidden');
-        setTimeout(() => sendConfirmEl.classList.add('hidden'), 2500);
+        sendBtn.textContent = 'Sent ✓';
+        setTimeout(() => {
+            sendBtn.textContent = '✅ Send observation';
+            sendBtn.disabled = false;
+        }, 2500);
     } catch (e) {
         setStatus('Could not send — check your connection and try again.', true);
-    } finally {
-        sendBtn.disabled = false;
         sendBtn.textContent = '✅ Send observation';
+        sendBtn.disabled = false;
     }
 }
 
