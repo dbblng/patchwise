@@ -28,6 +28,14 @@
    daytime skating window's dew/wind/temp data, nulling those modifiers and
    forcing a stale PATCHY instead of the DRY a real dew-depression modifier
    would have produced — now skips only hours with their own precip > 0.1).
+   2026-11-20: extended the dry-only-modifier/no-WET-from-humidity-alone rule
+   (previously only in the null/48h+ bands) to the 6-12h, 12-24h and 24-48h
+   bands in both calculateRoadCondition and scoreHourCondition — the 6-12h
+   band's base calc could reach WET from humidity>85 alone with zero rain
+   severity; all three bands' modifiers were bidirectional, letting a calm+
+   cold+near-saturated ambient combo manufacture WET with no real rain behind
+   it (Trello SteepMap Tasks card #1, field-confirmed via 3 Patchwise
+   observations 2026-11-19/20).
    ========================================== */
 
 function initWeatherModule() {
@@ -38,7 +46,7 @@ function initWeatherModule() {
         // this file. Distinct from index.html's ?v= cache-bust (which bumps on every
         // push regardless of type) so a build/version display can show "which algo
         // logic is live" without being muddied by unrelated UI changes.
-        ALGO_VERSION: '2026-11-15c'
+        ALGO_VERSION: '2026-11-20a'
     };
 
     /**
@@ -342,13 +350,17 @@ function initWeatherModule() {
                 else if (rainSeverity >= 2 || humidity > 85) base = 1;
                 else if (rainSeverity >= 1 || humidity > 78) base = 1;
                 else                                          base = 0;
-                return applyMods(base, scaledTotalMod);
+                return applyMods(base, Math.min(0, scaledTotalMod));
             }
+            // WET from base requires real rain severity — humidity alone (however high)
+            // caps at PATCHY, same no-path-to-WET-without-rain rule as every other band
+            // (2026-11-20: this band was the one remaining place humidity alone could
+            // still reach WET with zero rainSeverity involved).
             let base;
-            if      (rainSeverity >= 2 || humidity > 85) base = 2;
+            if      (rainSeverity >= 2)                  base = 2;
             else if (rainSeverity >= 1 || humidity > 78) base = 1;
             else                                          base = 0;
-            return applyMods(base, scaledTotalMod);
+            return applyMods(base, Math.min(0, scaledTotalMod));
         }
 
         // 12–24h
@@ -358,7 +370,7 @@ function initWeatherModule() {
             else if (rainSeverity >= 2 || humidity > 85) base = 1;
             else if (rainSeverity >= 1 || humidity > 78) base = 1;
             else                                          base = 0;
-            return applyMods(base, scaledTotalMod);
+            return applyMods(base, Math.min(0, scaledTotalMod));
         }
 
         // 24–48h
@@ -367,7 +379,7 @@ function initWeatherModule() {
             if      (rainSeverity >= 3 && humidity > 78) base = 2;
             else if (rainSeverity >= 2 || humidity > 78) base = 1;
             else                                          base = 0;
-            return applyMods(base, scaledTotalMod);
+            return applyMods(base, Math.min(0, scaledTotalMod));
         }
 
         // 48h+: DRY unless persistent damp conditions. Same no-rain-relevant rule as the
@@ -1010,33 +1022,36 @@ function initWeatherModule() {
         }
 
         // 6–12h
+        // WET from base requires real rain severity — humidity alone (however high)
+        // caps at PATCHY; modifiers dry-only (2026-11-20: this was the last band where
+        // ambient humidity/wind/dew alone, with zero rainSeverity, could still reach WET).
         if (hoursSinceRain < 12) {
             let base;
-            if      (rainSeverity >= 2 || minDaytimeHumidity > 85) base = 2;
+            if      (rainSeverity >= 2)                             base = 2;
             else if (rainSeverity >= 1 || minDaytimeHumidity > 78) base = 1;
             else                                                    base = 0;
-            const result = applyMods(base, dewMod, deltaMod, windMod);
+            const result = applyMods(base, Math.min(0, dewMod), Math.min(0, deltaMod), Math.min(0, windMod));
             return this._applySkatingWindowOverride({ ...result, message: rainAgoMsg(hoursSinceRain), safe: result.status==='DRY', ...extras }, data, hourly, daily, now);
         }
 
-        // 12–24h
+        // 12–24h — modifiers dry-only, same rule as above.
         if (hoursSinceRain < 24) {
             let base;
             if      (rainSeverity >= 3 && minDaytimeHumidity > 78) base = 2;
             else if (rainSeverity >= 2 || minDaytimeHumidity > 85) base = 1;
             else if (rainSeverity >= 1 || minDaytimeHumidity > 78) base = 1;
             else                                                    base = 0;
-            const result = applyMods(base, dewMod, deltaMod, windMod);
+            const result = applyMods(base, Math.min(0, dewMod), Math.min(0, deltaMod), Math.min(0, windMod));
             return this._applySkatingWindowOverride({ ...result, message: rainAgoMsg(hoursSinceRain), safe: result.status==='DRY', ...extras }, data, hourly, daily, now);
         }
 
-        // 24–48h
+        // 24–48h — modifiers dry-only, same rule as above.
         if (hoursSinceRain < 48) {
             let base;
             if      (rainSeverity >= 3 && minDaytimeHumidity > 78) base = 2;
             else if (rainSeverity >= 2 || minDaytimeHumidity > 78) base = 1;
             else                                                    base = 0;
-            const result = applyMods(base, dewMod, deltaMod, windMod);
+            const result = applyMods(base, Math.min(0, dewMod), Math.min(0, deltaMod), Math.min(0, windMod));
             return this._applySkatingWindowOverride({ ...result, message: rainAgoMsg(hoursSinceRain), safe: result.status==='DRY', ...extras }, data, hourly, daily, now);
         }
 
