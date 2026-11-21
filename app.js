@@ -559,13 +559,13 @@ function renderHourBox(hour, slot, hourScores, nowPct) {
     // unified allHourScores lookup (built in processForecast with a real 12h-window
     // rainSeverity) instead of the old scorePastSlot re-derivation.
     const source = slot.isFuture ? hourScores : allHourScores;
+    const makeKey = (hr) => slot.t.getFullYear() + '-' +
+        String(slot.t.getMonth() + 1).padStart(2, '0') + '-' +
+        String(slot.t.getDate()).padStart(2, '0') + 'T' +
+        String(hr).padStart(2, '0');
     let color = 'green';
     if (source) {
         const colorRank = { green: 0, yellow: 1, red: 2 };
-        const makeKey = (hr) => slot.t.getFullYear() + '-' +
-            String(slot.t.getMonth() + 1).padStart(2, '0') + '-' +
-            String(slot.t.getDate()).padStart(2, '0') + 'T' +
-            String(hr).padStart(2, '0');
         const s0 = source[makeKey(slot.t.getHours())];
         const s1 = source[makeKey(slot.t.getHours() + 1)];
         if (s0) color = s0.color;
@@ -577,12 +577,27 @@ function renderHourBox(hour, slot, hourScores, nowPct) {
     const rainClass = hasRain ? 'upcoming-rain' : (slot.isFuture ? 'upcoming-forecast' : 'upcoming-dry');
     const skClass = slot.inSkWin ? ' road-hour-skwin' : '';
 
+    // Dry boxes show "hours since rain" instead of a dash — only allHourScores
+    // carries hoursSinceRain (hourScores, the per-day future object, doesn't), so
+    // look it up there regardless of which source drove the dot colour above.
+    let precipText = '—';
+    if (hasRain) {
+        precipText = slot.precip.toFixed(1) + 'mm';
+    } else if (allHourScores) {
+        const a0 = allHourScores[makeKey(slot.t.getHours())];
+        const a1 = allHourScores[makeKey(slot.t.getHours() + 1)];
+        const hsr = (a1 && a1.hoursSinceRain !== undefined) ? a1.hoursSinceRain
+            : (a0 && a0.hoursSinceRain !== undefined) ? a0.hoursSinceRain : undefined;
+        if (hsr === null) precipText = '3d+';
+        else if (typeof hsr === 'number') precipText = hsr < 24 ? `${hsr}h` : `${Math.floor(hsr / 24)}d`;
+    }
+
     return `
         <div class="upcoming-hour ${rainClass}${skClass}">
             ${nowLineHtml}
             <div class="upcoming-time">${timeLabel}</div>
             <div class="weather-cond-dot weather-cond-${color}" title="Road condition"></div>
-            <div class="upcoming-precip" title="Precipitation">${hasRain ? slot.precip.toFixed(1) + 'mm' : '—'}</div>
+            <div class="upcoming-precip" title="${hasRain ? 'Precipitation' : 'Hours since rain'}">${precipText}</div>
             <div class="upcoming-hum ${humC(slot.hum)}" title="Relative humidity">${slot.hum}%</div>
             ${slot.dew !== null ? `<div class="upcoming-dew ${dewC(slot.dew)}" title="Dew point">${slot.dew}&deg;</div>` : ''}
         </div>
