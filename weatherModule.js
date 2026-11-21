@@ -46,7 +46,7 @@ function initWeatherModule() {
         // this file. Distinct from index.html's ?v= cache-bust (which bumps on every
         // push regardless of type) so a build/version display can show "which algo
         // logic is live" without being muddied by unrelated UI changes.
-        ALGO_VERSION: '2026-11-20a'
+        ALGO_VERSION: '2026-11-21a'
     };
 
     /**
@@ -469,7 +469,16 @@ function initWeatherModule() {
             // Grace period: score cannot jump more than one step down per 2-hour block.
             // Looks back at the previous 2 scored hours (one strip block) and takes the worse.
             // WET -> next can be PATCHY at best (not DRY)
-            // PATCHY -> next can be DRY only if humidity is genuinely low (<65%)
+            // PATCHY -> next can be DRY only once humidity is low enough — but "low enough"
+            // depends on how far from rain this hour is. Close to rain (<24h), demand a real
+            // drop (65%) before trusting a DRY reading. 24-48h, a middle ground (71%). 48h+/
+            // null (humidity-only bands — PATCHY there comes purely from humidity>78 with no
+            // rain severity involved at all) use the SAME 78% that triggers PATCHY in the
+            // first place — symmetric, no extra buffer (found 2026-11-21: ordinary diurnal
+            // humidity cycling 65-78% in the 48h+ band got stuck on PATCHY for 20+ hours
+            // despite every individual hour's own score wanting DRY, because 65% was
+            // unreachable that day — a stricter threshold than the one that put it in
+            // PATCHY to begin with).
             const prevTwo = allHours.slice(0, i).filter(ph => ph.score !== null).slice(-2);
             if (prevTwo.length > 0) {
                 // Worst status among the last 1–2 scored hours
@@ -477,9 +486,12 @@ function initWeatherModule() {
                     : prevTwo.some(ph => ph.score.status === 'PATCHY') ? 'PATCHY'
                     : 'DRY';
                 const cur = h.score.status;
+                const dryRecoveryThreshold = (h.hoursSinceRain === null || h.hoursSinceRain >= 48) ? 78
+                    : h.hoursSinceRain >= 24 ? 71
+                    : 65;
                 if (prevWorst === 'WET' && cur === 'DRY') {
                     h.score = { status: 'PATCHY', color: 'yellow', emoji: '🟡' };
-                } else if (prevWorst === 'PATCHY' && cur === 'DRY' && h.humidity >= 65) {
+                } else if (prevWorst === 'PATCHY' && cur === 'DRY' && h.humidity >= dryRecoveryThreshold) {
                     h.score = { status: 'PATCHY', color: 'yellow', emoji: '🟡' };
                 }
             }
