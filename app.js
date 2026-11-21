@@ -559,15 +559,23 @@ function renderHourBox(hour, slot, hourScores, nowPct) {
         String(slot.t.getMonth() + 1).padStart(2, '0') + '-' +
         String(slot.t.getDate()).padStart(2, '0') + 'T' +
         String(hr).padStart(2, '0');
-    let color = 'green';
-    if (source) {
-        const colorRank = { green: 0, yellow: 1, red: 2 };
-        const s0 = source[makeKey(slot.t.getHours())];
-        const s1 = source[makeKey(slot.t.getHours() + 1)];
-        if (s0) color = s0.color;
-        if (s1 && colorRank[s1.color] > colorRank[color]) color = s1.color;
-    }
-    if (slot.precip > 0.1 && color !== 'red') color = 'red';
+    // Two dots, one per real hour, each with its own colour and its own rain
+    // hard-floor — a single worst-of-pair dot could disagree with the live
+    // current-slot status once that started reading the exact current hour
+    // (found 2026-11-21: box showed PATCHY from its second hour while the big
+    // dot correctly said DRY for the first hour "now" was actually in).
+    const s0 = source ? source[makeKey(slot.t.getHours())] : null;
+    const s1 = source ? source[makeKey(slot.t.getHours() + 1)] : null;
+    let color0 = s0 ? s0.color : 'green';
+    let color1 = s1 ? s1.color : null;
+    const precip0 = (slot.i0 !== undefined) ? (rawHourly.precipitation[slot.i0] || 0) : 0;
+    const precip1 = (slot.i0 !== undefined) ? (rawHourly.precipitation[slot.i0 + 1] || 0) : 0;
+    if (precip0 > 0.1) color0 = 'red';
+    if (color1 !== null && precip1 > 0.1) color1 = 'red';
+    const titleCase = (s) => s ? s.charAt(0) + s.slice(1).toLowerCase() : '?';
+    const dotTitle = s1
+        ? `${slot.t.getHours()}:00 ${titleCase(s0 && s0.status)} · ${slot.t.getHours() + 1}:00 ${titleCase(s1 && s1.status)}`
+        : 'Road condition';
 
     const hasRain = slot.precip > 0.1;
     const rainClass = hasRain ? 'upcoming-rain' : (slot.isFuture ? 'upcoming-forecast' : 'upcoming-dry');
@@ -592,7 +600,10 @@ function renderHourBox(hour, slot, hourScores, nowPct) {
         <div class="upcoming-hour ${rainClass}${skClass}">
             ${nowLineHtml}
             <div class="upcoming-time">${timeLabel}</div>
-            <div class="weather-cond-dot weather-cond-${color}" title="Road condition"></div>
+            <div class="weather-cond-dot-pair" title="${dotTitle}">
+                <div class="weather-cond-dot weather-cond-${color0}"></div>
+                ${color1 !== null ? `<div class="weather-cond-dot weather-cond-${color1}"></div>` : ''}
+            </div>
             <div class="upcoming-precip" title="${hasRain ? 'Precipitation' : 'Hours since rain'}">${precipText}</div>
             <div class="upcoming-hum ${humC(slot.hum)}" title="Relative humidity">${slot.hum}%</div>
             ${slot.dew !== null ? `<div class="upcoming-dew ${dewC(slot.dew)}" title="Dew point">${slot.dew}&deg;</div>` : ''}
