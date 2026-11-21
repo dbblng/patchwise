@@ -286,14 +286,20 @@ async function checkLocation(lat, lng, label) {
 }
 
 // Big-box dot color + message: derives from the unified hour-score lookup (the
-// current 2h slot containing "now"), same source of truth as the hourly strip — not
-// from calculateRoadCondition's own independent status/message. Returns
+// SINGLE hour "now" actually falls within), same source of truth as the hourly
+// strip — not from calculateRoadCondition's own independent status/message. Returns
 // {color, message} or null if the lookup has no data (e.g. incomplete API response),
 // in which case callers fall back to road.color/road.message.
+//
+// Does NOT take the worse of the 2-hour display pair — that "worse of pair" logic
+// is for the hourly strip's non-live boxes, where it's a reasonable visual summary.
+// For the LIVE reading, pairing has no sense of where "now" sits inside the box, so
+// it could show a stale worse hour that had already passed and genuinely improved
+// (field case 2026-11-19), or a not-yet-started worse hour that hadn't begun yet
+// (field case 2026-11-21) — both confirmed via code replay against real field data.
 function getCurrentSlotColor(data, now) {
     if (!rawHourly || !data.forecast || !data.forecast.allHourScores) return null;
     const allHourScores = data.forecast.allHourScores;
-    const colorRank = { green: 0, yellow: 1, red: 2 };
     const makeKey = (t) => t.getFullYear() + '-' +
         String(t.getMonth()+1).padStart(2,'0') + '-' +
         String(t.getDate()).padStart(2,'0') + 'T' +
@@ -306,27 +312,17 @@ function getCurrentSlotColor(data, now) {
         const slotEnd = new Date(t.getTime() + 2 * 3600000);
         if (t <= now && now < slotEnd) {
             const nextI = i + 1 < rawHourly.time.length ? i + 1 : null;
-            const s0 = allHourScores[makeKey(t)];
             const t1 = nextI !== null ? parseLocalTime(rawHourly.time[nextI]) : null;
-            const s1 = t1 ? allHourScores[makeKey(t1)] : null;
-            // Message travels with WHICHEVER hour actually determined the final
-            // colour below — previously this always used the even hour's message
-            // even when the odd hour was the worse one driving the colour, which
-            // could show e.g. "Rain 4h ago" while the odd hour's own data said
-            // "raining now" (found 2026-11-15, same category as the colour fix).
-            let col = s0 ? s0.color : null;
-            let message = s0 ? s0.message : null;
-            if (s1 && colorRank[s1.color] > colorRank[col || 'green']) {
-                col = s1.color;
-                message = s1.message;
-            }
-            const p0 = rawHourly.precipitation[i] || 0;
-            const p1 = nextI !== null ? (rawHourly.precipitation[nextI] || 0) : 0;
-            if ((p0 + p1) > 0.1) {
+            const inSecondHour = t1 !== null && now >= t1;
+            const curI = inSecondHour ? nextI : i;
+            const curT = inSecondHour ? t1 : t;
+            const cur = allHourScores[makeKey(curT)];
+            let col = cur ? cur.color : null;
+            let message = cur ? cur.message : null;
+            const curPrecip = rawHourly.precipitation[curI] || 0;
+            if (curPrecip > 0.1) {
                 col = 'red';
-                // Prefer whichever of the two hours actually has the rain for the message
-                if (p1 > 0.1 && s1 && s1.message) message = s1.message;
-                else if (p0 > 0.1 && s0 && s0.message) message = s0.message;
+                if (cur && cur.message) message = cur.message;
             }
             return { color: col, message };
         }
