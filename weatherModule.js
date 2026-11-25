@@ -46,7 +46,7 @@ function initWeatherModule() {
         // this file. Distinct from index.html's ?v= cache-bust (which bumps on every
         // push regardless of type) so a build/version display can show "which algo
         // logic is live" without being muddied by unrelated UI changes.
-        ALGO_VERSION: '2026-11-21a'
+        ALGO_VERSION: '2026-11-25a'
     };
 
     /**
@@ -302,7 +302,14 @@ function initWeatherModule() {
         // Road is physically wet regardless of conditions — except light, brief rain
         // (severity 1, under ~12h of actual rain), which doesn't leave the same soaking
         // and reads as PATCHY rather than WET.
-        if (hoursSinceRain < 2) {
+        // Explicit null guard: JS coerces null to 0 for relational comparisons, so
+        // `null < 2` is true — without this guard, every "no rain in 3+ days" hour
+        // silently fell into this hard-lock branch instead of the null-band check
+        // below, making the null band's humidity-gated logic permanently unreachable
+        // and flooring every dry-spell hour at PATCHY regardless of humidity (found
+        // 2026-11-25 via 2 field observations: 72% and 84% humidity both showing
+        // PATCHY when the lower one should have been DRY).
+        if (hoursSinceRain !== null && hoursSinceRain < 2) {
             const durationHrs = rainDurationHours === undefined ? Infinity : rainDurationHours;
             const lightBriefRain = rainSeverity === 1 && durationHrs < 12;
             const base = lightBriefRain ? 1 : (rainSeverity >= 1 ? 2 : 1);
