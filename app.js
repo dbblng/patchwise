@@ -353,6 +353,27 @@ function renderResult(lat, lng, label, data) {
         : null;
     const omLink = `<a class="road-detail-link" href="https://open-meteo.com/en/docs#latitude=${lat}&longitude=${lng}" target="_blank">Open-Meteo →</a>`;
 
+    // Experimental V2 model (continuous wetness decay) — shown for live
+    // comparison only, doesn't feed into slotStatus/slotColor above at all.
+    // See Patchwise Trello "[HIGH PRIORITY] BIG IDEA" card (2026-11-25/26).
+    let v2Html = '';
+    try {
+        if (road.rawData) {
+            const now = new Date();
+            const v2Scores = weatherModule.computeWetnessV2(road.rawData);
+            const v2Key = now.getFullYear() + '-' +
+                String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                String(now.getDate()).padStart(2, '0') + 'T' +
+                String(now.getHours()).padStart(2, '0');
+            const v2 = v2Scores[v2Key];
+            if (v2) {
+                v2Html = `<div class="v2-experimental" title="Experimental decay-based model — not used for the main prediction above, shown for live comparison only">🧪 V2 (experimental): <strong>${v2.status}</strong> &middot; wetness ${v2.wetness}</div>`;
+            }
+        }
+    } catch (e) {
+        console.warn('V2 model display failed:', e.message);
+    }
+
     resultEl.innerHTML = `
         <div class="location-name">${label || 'Selected location'}</div>
         <div class="coords">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
@@ -381,6 +402,7 @@ function renderResult(lat, lng, label, data) {
                 </div>
             </div>
         </div>
+        ${v2Html}
         <div id="sun-exposure" class="sun-exposure">☀️ Checking sun exposure…</div>
     `;
     resultEl.classList.remove('hidden');

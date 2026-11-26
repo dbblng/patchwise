@@ -127,6 +127,22 @@ h1 {
     justify-content: center;
 }
 
+/* Experimental V2 wetness-decay model — live comparison only, never feeds the
+   main prediction box above it (2026-11-26, see Trello "[HIGH PRIORITY] BIG
+   IDEA" card). Reuses the same "experimental, display-only" dashed-box
+   language as .sun-exposure below, with its own accent so the two don't blend
+   together. */
+.v2-experimental {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 8px;
+    background: #211c2e;
+    border: 1px dashed #6a4fb3;
+    font-size: 0.75rem;
+    color: #c9b8f0;
+    text-align: center;
+}
+
 /* Experimental sun/road exposure line — display-only, not yet used in predictions */
 .sun-exposure {
     margin-top: 0.5rem;
