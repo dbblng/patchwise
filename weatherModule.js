@@ -1289,6 +1289,110 @@ function initWeatherModule() {
         return arrows[index];
     };
 
+    // ==========================================================================
+    // EXPERIMENTAL V2 MODEL — continuous "wetness" decay, not threshold bands.
+    // Lives entirely separately from scoreHourCondition/calculateRoadCondition —
+    // does not affect what's displayed in the UI. Only used to silently log a
+    // comparison prediction alongside each field observation (see app.js
+    // sendObservation), so we can validate it against real data over time before
+    // ever considering a cutover. See Patchwise Trello card "[HIGH PRIORITY] BIG
+    // IDEA: rethink PATCHY as a decay state" (2026-11-25).
+    //
+    // Model: rain adds "wetness" (0-100) each hour it actually rains; it decays
+    // every other hour at a rate set by real drying conditions (humidity acts as
+    // a multiplier — saturated air suppresses ALL drying, not an independent
+    // additive factor). Status is a threshold read of the wetness value, except
+    // an hour with active precipitation always reads WET regardless (hard lock,
+    // matching the live model). Constants are a first-pass calibration against
+    // 4 real Patchwise field cases (2026-11-26) — expect to keep tuning as more
+    // observations come in.
+    // ==========================================================================
+    const V2_WET_THRESHOLD = 60;
+    const V2_PATCHY_THRESHOLD = 15;
+    const V2_MAX_WETNESS = 100;
+
+    function v2RainAdd(precipMm) {
+        if (precipMm <= 0.1) return 0;
+        if (precipMm < 0.3) return 18;   // trace
+        if (precipMm < 3)   return 38;   // light
+        if (precipMm < 6)   return 70;   // moderate
+        return 100;                       // heavy
+    }
+
+    function v2DryingRate(humidity, wind, dewGap, temp) {
+        let dewComp;
+        if (dewGap === null) dewComp = 8;
+        else if (dewGap < 3) dewComp = 2;
+        else if (dewGap < 6) dewComp = 5;
+        else if (dewGap < 12) dewComp = 11;
+        else dewComp = 18;
+
+        let windComp;
+        if (wind === null) windComp = 3;
+        else if (wind > 30) windComp = 9;
+        else if (wind > 15) windComp = 5;
+        else if (wind < 5) windComp = 0;
+        else windComp = 3;
+
+        let tempComp;
+        if (temp === null) tempComp = 3;
+        else if (temp < 5) tempComp = 0;
+        else if (temp > 15) tempComp = 5;
+        else tempComp = 3;
+
+        let humidityMult;
+        if (humidity > 90) humidityMult = 0.5;
+        else if (humidity > 78) humidityMult = 0.8;
+        else humidityMult = 1.0;
+
+        return (dewComp + windComp + tempComp) * humidityMult;
+    }
+
+    function v2StatusFromWetness(w) {
+        if (w >= V2_WET_THRESHOLD) return 'WET';
+        if (w >= V2_PATCHY_THRESHOLD) return 'PATCHY';
+        return 'DRY';
+    }
+
+    /**
+     * Walk the full fetched hourly series (same raw data.hourly used elsewhere)
+     * and return a lookup identical in shape to allHourScores, keyed the same
+     * way ("YYYY-MM-DDTHH"), so callers can look up "what would V2 have said"
+     * for any hour exactly like they already do for the live model.
+     */
+    module.computeWetnessV2 = function(data) {
+        if (!data || !data.hourly) return {};
+        const hourly = data.hourly;
+        let wetness = 0;
+        const out = {};
+        for (let i = 0; i < hourly.time.length; i++) {
+            const t = parseLocalTime(hourly.time[i]);
+            const precip = hourly.precipitation[i] || 0;
+            const humidity = hourly.relative_humidity_2m[i] || 0;
+            const wind = hourly.windspeed_10m ? (hourly.windspeed_10m[i] ?? null) : null;
+            const dewpoint = hourly.dewpoint_2m ? (hourly.dewpoint_2m[i] ?? null) : null;
+            const temp = hourly.temperature_2m ? (hourly.temperature_2m[i] ?? null) : null;
+
+            const isRainingNow = precip > 0.1;
+            const add = v2RainAdd(precip);
+            if (add > 0) {
+                wetness = Math.min(V2_MAX_WETNESS, wetness + add);
+            } else {
+                const gap = (dewpoint !== null && temp !== null) ? (temp - dewpoint) : null;
+                const rate = v2DryingRate(humidity, wind, gap, temp);
+                wetness = Math.max(0, wetness - rate);
+            }
+            const status = isRainingNow ? 'WET' : v2StatusFromWetness(wetness);
+
+            const localKey = t.getFullYear() + '-' +
+                String(t.getMonth() + 1).padStart(2, '0') + '-' +
+                String(t.getDate()).padStart(2, '0') + 'T' +
+                String(t.getHours()).padStart(2, '0');
+            out[localKey] = { status, wetness: Math.round(wetness * 10) / 10 };
+        }
+        return out;
+    };
+
     console.log('✅ Weather module initialized (Open-Meteo)');
     return module;
 }

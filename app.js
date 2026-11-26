@@ -442,7 +442,29 @@ async function sendObservation() {
         return;
     }
     const { lat, lng, road, hrsVal, slotStatus, checkedAt } = lastCheck;
-    const notes = notesInputEl.value.trim();
+    let notes = notesInputEl.value.trim();
+
+    // Experimental V2 model (continuous wetness decay) — computed silently and
+    // appended to notes for comparison, with zero effect on anything shown in
+    // the UI. No dedicated Form field yet; piggybacking on notes is a deliberate
+    // shortcut to start collecting comparison data without editing the Google
+    // Form (2026-11-26, see Patchwise Trello "[HIGH PRIORITY] BIG IDEA" card).
+    try {
+        if (road.rawData) {
+            const v2Scores = weatherModule.computeWetnessV2(road.rawData);
+            const v2Key = checkedAt.getFullYear() + '-' +
+                String(checkedAt.getMonth() + 1).padStart(2, '0') + '-' +
+                String(checkedAt.getDate()).padStart(2, '0') + 'T' +
+                String(checkedAt.getHours()).padStart(2, '0');
+            const v2 = v2Scores[v2Key];
+            if (v2) {
+                const v2Tag = `[V2: ${v2.status}, wetness=${v2.wetness}]`;
+                notes = notes ? `${notes} ${v2Tag}` : v2Tag;
+            }
+        }
+    } catch (e) {
+        console.warn('V2 model comparison failed:', e.message);
+    }
 
     const body = new URLSearchParams();
     body.set(FORM_ENTRY_IDS.timestamp, checkedAt.toLocaleString());
