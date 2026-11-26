@@ -717,6 +717,21 @@ function toggleForecastDetail(day, dayEl) {
     forecastDetailEl.classList.remove('hidden');
 }
 
+// err.message is empty on some browsers/devices (notably several mobile
+// webviews) — only err.code reliably carries the actual reason, so fall back
+// to a human-readable reason keyed off the code when message is blank
+// (found 2026-11-26: Mauro saw a bare "Could not get location:" with nothing
+// after it).
+function geoErrorMessage(err) {
+    if (err.message) return err.message;
+    switch (err.code) {
+        case 1: return 'Permission denied — allow location access for this site and try again.';
+        case 2: return 'Position unavailable — GPS signal not found.';
+        case 3: return 'Timed out — try again, ideally outdoors with a clear sky view.';
+        default: return 'Unknown error.';
+    }
+}
+
 document.getElementById('gps-btn').addEventListener('click', () => {
     if (!navigator.geolocation) {
         setStatus('Geolocation not supported on this browser/device.', true);
@@ -725,7 +740,7 @@ document.getElementById('gps-btn').addEventListener('click', () => {
     setStatus('Getting your location…');
     navigator.geolocation.getCurrentPosition(
         (pos) => checkLocation(pos.coords.latitude, pos.coords.longitude, 'My Location'),
-        (err) => setStatus('Could not get location: ' + err.message, true),
+        (err) => setStatus('Could not get location: ' + geoErrorMessage(err), true),
         { enableHighAccuracy: true, timeout: 10000 }
     );
 });
